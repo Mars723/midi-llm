@@ -210,3 +210,6 @@ __marimo__/
 soundfonts/
 generated_outputs/
 test_outputs/
+generated_score_first/
+training_manifests/
+training_runs/

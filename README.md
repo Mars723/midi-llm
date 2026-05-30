@@ -8,6 +8,69 @@
 
 Built on **Llama 3.2 (1B)** with an extended vocabulary for MIDI tokens.
 
+## Score-First Classical Piano V1
+
+This fork adds a runnable score-first path for complete classical piano
+miniatures. It keeps notation separate from expressive performance timing:
+
+- `PianoScoreIR` is the authoritative score and compiles to MusicXML, PDF, PNG,
+  and quantized score MIDI.
+- `PianoPerformanceIR` contains velocity, pedal, rubato, and microtiming for
+  expressive MIDI without leaking every BPM change into the engraved score.
+- `PiecePlanIR` and `MotifBank` describe the complete work before section
+  expansion. `16-64` measures is a local training window, not an output limit.
+
+Generate and inspect a complete 2-6 minute piece:
+
+```bash
+python -m midi_llm.compose \
+  --prompt "A lyrical nocturne with a tense middle section and a calm return." \
+  --controls configs/example_controls.yaml \
+  --whole-piece
+
+python -m midi_llm.preview --run generated_score_first/<run> --serve
+```
+
+Importing an external performance MIDI creates a labeled draft score:
+
+```bash
+python -m midi_llm.import_midi \
+  --input performance.mid \
+  --output-dir draft_import
+```
+
+Import a notation-first MusicXML training source without treating it as a
+performance capture:
+
+```bash
+python -m midi_llm.musicxml_score \
+  --input source.musicxml \
+  --output-dir imported_score
+```
+
+See [`docs/SCORE_FIRST.md`](docs/SCORE_FIRST.md) for the artifact contract and
+[`docs/TRAINING.md`](docs/TRAINING.md) for the public-domain PDMX curriculum.
+The original inference scripts below remain available as the baseline.
+
+Validate the cloud QLoRA launch specification locally after materializing the
+PDMX model dataset:
+
+```bash
+python -m midi_llm.train_scoredsl \
+  --dataset-dir training_manifests/pdmx/model_dataset \
+  --output-dir training_runs/score_first_v1 \
+  --dry-run
+```
+
+Generate the 50-piece v1 review set after local smoke testing:
+
+```bash
+python -m midi_llm.release_gate \
+  --output-dir generated_score_first/release_gate_v1 \
+  --pieces 50 \
+  --include-sonata
+```
+
 
 - **[Setup](#setup)**
 - **[Inference (Generation) Usage](#inference-generation-usage)**

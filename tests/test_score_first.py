@@ -1,0 +1,413 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+
+from midi_llm.compiler import find_musescore, render_musescore, write_musicxml, write_performance_midi
+from midi_llm.compose import compose
+from midi_llm.curriculum import prepare_curriculum
+from midi_llm.evaluate import evaluate_score
+from midi_llm.gallery import write_gallery
+from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
+from midi_llm.materialize_training import materialize_training_dataset
+from midi_llm.musicxml_score import import_musicxml_score
+from midi_llm.planner import ComposeControls, create_piece_plan
+from midi_llm.prepare_pdmx import prepare_manifest
+from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
+from midi_llm.release_gate import run_release_gate
+from midi_llm.scoredsl import decode_score, encode_score
+from midi_llm.score_ir import validate_score
+from midi_llm.training import create_run_plan
+from midi_llm.train_scoredsl import TrainConfig, build_training_spec
+
+
+class ScoreFirstTest(unittest.TestCase):
+    def build_score(self):
+        plan = create_piece_plan(
+            "A complete lyrical nocturne with a contrasting middle section.",
+            ComposeControls(duration_minutes=3.0),
+        )
+        motifs = create_motif_bank(plan.key, plan.genre)
+        score = generate_score_candidate(plan, motifs, seed=23)
+        performance = render_performance(score, seed=24)
+        return score, performance
+
+    def test_whole_piece_plan_covers_complete_output(self):
+        score, _ = self.build_score()
+        self.assertGreaterEqual(score.plan.measure_count, 48)
+        self.assertLessEqual(score.plan.measure_count, 192)
+        self.assertEqual(score.plan.sections[0].start_measure, 1)
+        self.assertEqual(score.plan.sections[-1].end_measure, score.plan.measure_count)
+        self.assertEqual(validate_score(score), [])
+
+    def test_scoredsl_round_trip(self):
+        score, _ = self.build_score()
+        decoded = decode_score(encode_score(score))
+        self.assertEqual(decoded.plan, score.plan)
+        self.assertEqual(decoded.motif_bank, score.motif_bank)
+        self.assertEqual(decoded.notes, score.notes)
+        self.assertEqual(decoded.directions, score.directions)
+
+    def test_performance_tempo_curve_does_not_leak_into_musicxml(self):
+        score, performance = self.build_score()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "score.musicxml"
+            write_musicxml(score, path)
+            root = ET.parse(path).getroot()
+            self.assertEqual(len(root.findall(".//sound[@tempo]")), len(score.plan.tempo_marks))
+            self.assertGreater(len(performance.tempo_curve), len(score.plan.tempo_marks))
+            metrics = evaluate_score(score, performance, path)
+            self.assertTrue(metrics["tempo_overlay_isolated"])
+
+    def test_external_midi_import_keeps_micro_tempos_in_overlay(self):
+        score, performance = self.build_score()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir)
+            midi = path / "performance.mid"
+            write_performance_midi(score, performance, midi)
+            draft, imported_performance = draft_from_parsed(parse_midi(midi), "Imported")
+            self.assertGreater(len(imported_performance.tempo_curve), len(draft.plan.tempo_marks))
+            self.assertEqual(len(draft.plan.tempo_marks), 1)
+            self.assertTrue(draft.metadata["draft"])
+
+    def test_structural_tempo_filter_promotes_stable_platforms(self):
+        from midi_llm.import_midi import TempoPoint
+
+        tempos = [
+            TempoPoint(0, 100),
+            TempoPoint(480, 98),
+            TempoPoint(960, 101),
+            TempoPoint(3840, 80),
+        ]
+        filtered = select_structural_tempos(tempos, 480, 4, final_tick=8000)
+        self.assertEqual([round(point.bpm) for point in filtered], [100, 80])
+
+    def test_compose_writes_complete_gallery(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            output = Path(raw_dir) / "run"
+            args = argparse.Namespace(
+                prompt="A complete prelude with a clear return.",
+                controls=None,
+                output_dir=str(output),
+                genre="prelude",
+                form="ABA",
+                duration_minutes=3.0,
+                measure_range="48-96",
+                key="C major",
+                meter="4/4",
+                tempo=84,
+                difficulty="intermediate",
+                markings="dynamics,pedal,articulations",
+                title=None,
+                whole_piece=True,
+                strategy="hierarchical",
+                candidates=2,
+                seed=23,
+                skip_musescore=True,
+                musescore_bin=None,
+            )
+            compose(args)
+            for filename in (
+                "score.ir.json",
+                "score.dsl",
+                "score.musicxml",
+                "score.mid",
+                "performance.ir.json",
+                "performance.mid",
+                "manifest.json",
+                "gallery.html",
+            ):
+                self.assertTrue((output / filename).exists(), filename)
+            self.assertIn("Section Timeline", (output / "gallery.html").read_text(encoding="utf-8"))
+
+    def test_pdmx_manifest_and_cloud_run_plan(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            metadata = root / "pdmx.csv"
+            with metadata.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=("composer", "title", "path", "instrumentation", "all_valid", "no_license_conflict"),
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "composer": "Composer",
+                        "title": "Solo",
+                        "path": "solo.mxl",
+                        "instrumentation": "piano",
+                        "all_valid": "1",
+                        "no_license_conflict": "1",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "composer": "Composer",
+                        "title": "Duo",
+                        "path": "duo.mxl",
+                        "instrumentation": "piano violin",
+                        "all_valid": "1",
+                        "no_license_conflict": "1",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "composer": "Composer",
+                        "title": "Solo",
+                        "path": "duplicate-solo.mxl",
+                        "instrumentation": "piano",
+                        "all_valid": "1",
+                        "no_license_conflict": "1",
+                    }
+                )
+            summary = prepare_manifest(metadata, root / "manifest")
+            self.assertEqual(summary["accepted_unique_solo_piano_works"], 1)
+            manifest = root / "manifest" / "pdmx_score_first_manifest.jsonl"
+            run_plan = create_run_plan(manifest, root / "run_plan.json")
+            self.assertEqual(run_plan["representation"], "ScoreDSL 1.0")
+            self.assertIn("whole-piece-generate", [phase["name"] for phase in run_plan["phases"]])
+
+    def test_curriculum_keeps_full_piece_and_adds_contextual_windows(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            score_path = root / "source.musicxml"
+            score_path.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><key><fifths>-3</fifths><mode>minor</mode></key><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+      <direction><sound tempo="76"/></direction>
+    </measure>
+    %s
+  </part>
+</score-partwise>
+"""
+                % "\n".join(f'    <measure number="{number}"/>' for number in range(2, 81)),
+                encoding="utf-8",
+            )
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "work-1",
+                        "split": "train",
+                        "path": score_path.name,
+                        "title": "Source",
+                        "composer": "Composer",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = prepare_curriculum(manifest, root / "curriculum")
+            self.assertEqual(summary["blueprints_written"], 1)
+            examples_path = root / "curriculum" / "curriculum_examples.jsonl"
+            examples = [
+                json.loads(line)
+                for line in examples_path.read_text(encoding="utf-8").splitlines()
+            ]
+            whole = next(row for row in examples if row["task"] == "whole-piece-generate")
+            self.assertEqual(whole["target_range"], [1, 80])
+            windows = [row for row in examples if row["task"] == "section-expand-16-64"]
+            self.assertEqual({row["target_range"][1] - row["target_range"][0] + 1 for row in windows}, {16, 32, 64})
+            self.assertTrue(all(row["context"]["piece_blueprint"] == "blueprint-work-1" for row in windows))
+            self.assertTrue(all(row["context"]["future_ending_target"]["measure"] == 80 for row in windows))
+            run_plan = create_run_plan(manifest, root / "run_plan.json", examples_path)
+            self.assertEqual(run_plan["curriculum_examples"]["status"], "prepared")
+
+    def test_musicxml_score_import_preserves_professional_notation(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "notation.musicxml"
+            source.write_text(_notation_musicxml(), encoding="utf-8")
+            score = import_musicxml_score(source)
+            self.assertEqual(score.plan.title, "Training Etude")
+            self.assertEqual(score.metadata["composer"], "Test Composer")
+            self.assertEqual(score.plan.key, "C minor")
+            self.assertEqual(score.plan.tempo_bpm, 76)
+            self.assertEqual(score.plan.meter.beats, 4)
+            self.assertEqual(score.plan.meter.beat_type, 4)
+            self.assertEqual(score.notes[0].pitch, 60)
+            self.assertEqual(score.notes[0].articulation, "staccato")
+            self.assertEqual(score.notes[0].fingering, "1")
+            self.assertTrue(score.notes[0].tie_start)
+            self.assertTrue(any(note.staff == 2 for note in score.notes))
+            self.assertEqual(
+                {"tempo", "dynamic", "wedge-start", "wedge-stop", "pedal-start", "pedal-stop"},
+                {direction.kind for direction in score.directions},
+            )
+            self.assertEqual(
+                {"articulations", "dynamics", "fingering", "pedal", "ties", "wedges"},
+                set(score.plan.markings),
+            )
+            self.assertEqual(score.layout_hints[0].measure, 2)
+            self.assertEqual(validate_score(score), [])
+
+    def test_materialized_training_examples_include_full_plan_and_local_context(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            (root / "notation.musicxml").write_text(_notation_musicxml(), encoding="utf-8")
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "work-notation",
+                        "split": "train",
+                        "path": "notation.musicxml",
+                        "title": "Training Etude",
+                        "composer": "Test Composer",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            curriculum_dir = root / "curriculum"
+            prepare_curriculum(manifest, curriculum_dir, dataset_root=root)
+            dataset_dir = root / "model_dataset"
+            summary = materialize_training_dataset(curriculum_dir, dataset_dir, dataset_root=root)
+            self.assertEqual(summary["source_scores_imported"], 1)
+            self.assertEqual(summary["source_scores_failed"], 0)
+            self.assertGreater(summary["examples_written"], 0)
+            self.assertEqual(summary["score_marking_counts"]["pedal"], 1)
+            rows = [
+                json.loads(line)
+                for line in (dataset_dir / "train.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            whole = next(row for row in rows if row["task"] == "whole-piece-generate")
+            self.assertEqual(whole["target_range"], [1, 80])
+            self.assertEqual(decode_score(whole["target_scoredsl"]).plan.measure_count, 80)
+            local = next(
+                row
+                for row in rows
+                if row["task"] == "section-expand-16-64"
+                and row["target_range"][0] > 1
+                and row["target_range"][1] < 80
+            )
+            self.assertEqual(local["target_scope"], "fragment")
+            self.assertEqual(local["model_input"]["piece_plan"]["measure_count"], 80)
+            self.assertIsNotNone(local["model_input"]["left_neighbor_scoredsl"])
+            self.assertIsNotNone(local["model_input"]["right_neighbor_scoredsl"])
+            self.assertEqual(local["model_input"]["future_ending_target"]["measure"], 80)
+            fragment = decode_score(local["target_scoredsl"])
+            self.assertTrue(all(local["target_range"][0] <= note.measure <= local["target_range"][1] for note in fragment.notes))
+            spec = build_training_spec(
+                TrainConfig(
+                    dataset_dir=str(dataset_dir),
+                    output_dir=str(root / "training_run"),
+                    tasks=("whole-piece-generate",),
+                )
+            )
+            self.assertEqual(spec["dataset"]["selected_examples"], 1)
+            self.assertEqual(spec["model"]["complete_piece_truncation_policy"], "forbidden")
+            self.assertTrue((root / "training_run" / "training_spec.json").exists())
+
+    def test_release_gate_dry_run_writes_review_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            summary = run_release_gate(
+                root,
+                piece_count=2,
+                candidates=1,
+                skip_musescore=True,
+                include_sonata=True,
+            )
+            self.assertEqual(summary["generated_piece_count"], 2)
+            self.assertEqual(summary["rates"]["tempo_overlay_leakage_count"], 0)
+            self.assertFalse(summary["checks"]["piece_count"])
+            self.assertFalse(summary["checks"]["musescore_render_rate"])
+            self.assertFalse(summary["release_ready"])
+            self.assertEqual(len(summary["experimental_sonata_allegro"]), 1)
+            self.assertTrue((root / "automatic_results.csv").exists())
+            self.assertTrue((root / "human_review.csv").exists())
+            self.assertTrue((root / "release_gate.json").exists())
+            self.assertIn("piece_001/gallery.html", (root / "review_gallery.html").read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(find_musescore(), "MuseScore is not installed")
+    def test_musescore_exports_pdf_and_png(self):
+        score, _ = self.build_score()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            musicxml = write_musicxml(score, root / "score.musicxml")
+            result = render_musescore(musicxml, root)
+            self.assertTrue(result["available"])
+            self.assertTrue((root / "score.pdf").exists())
+            self.assertGreater(len(result["pages"]), 0)
+
+
+def _notation_musicxml(measure_count=80):
+    trailing = "\n".join(
+        f"""
+    <measure number="{number}">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>16</duration><voice>1</voice><staff>1</staff>
+      </note>
+    </measure>"""
+        for number in range(3, measure_count + 1)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <work><work-title>Training Etude</work-title></work>
+  <identification><creator type="composer">Test Composer</creator></identification>
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions>
+        <key><fifths>-3</fifths><mode>minor</mode></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <staves>2</staves>
+      </attributes>
+      <direction>
+        <direction-type><words>Andante</words></direction-type>
+        <sound tempo="76"/>
+      </direction>
+      <direction><direction-type><dynamics><p/></dynamics></direction-type><staff>1</staff></direction>
+      <direction><direction-type><wedge type="crescendo"/></direction-type><staff>1</staff></direction>
+      <direction><direction-type><pedal type="start"/></direction-type><staff>2</staff></direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration><voice>1</voice><staff>1</staff>
+        <tie type="start"/>
+        <notations>
+          <tied type="start"/>
+          <articulations><staccato/></articulations>
+          <technical><fingering>1</fingering></technical>
+        </notations>
+      </note>
+      <note>
+        <chord/>
+        <pitch><step>E</step><alter>-1</alter><octave>4</octave></pitch>
+        <duration>4</duration><voice>1</voice><staff>1</staff>
+      </note>
+      <backup><duration>4</duration></backup>
+      <note>
+        <pitch><step>C</step><octave>3</octave></pitch>
+        <duration>4</duration><voice>2</voice><staff>2</staff>
+      </note>
+      <forward><duration>12</duration></forward>
+    </measure>
+    <measure number="2">
+      <print new-system="yes"/>
+      <direction><direction-type><wedge type="stop"/></direction-type><staff>1</staff></direction>
+      <direction><direction-type><pedal type="stop"/></direction-type><staff>2</staff></direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>16</duration><voice>1</voice><staff>1</staff>
+        <tie type="stop"/><notations><tied type="stop"/></notations>
+      </note>
+    </measure>
+    {trailing}
+  </part>
+</score-partwise>
+"""
+
+
+if __name__ == "__main__":
+    unittest.main()

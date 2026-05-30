@@ -1,0 +1,22 @@
+pipeline: score-first-piano-training-v1
+dataset:
+  core: PDMX
+  filters: [no_license_conflict, all_valid, solo_piano]
+  split_unit: normalized_work_id
+representation:
+  score: ScoreDSL-1.0
+  performance: PianoPerformanceIR-1.0
+curriculum:
+  - score-dsl-autoencode
+  - section-expand-16-64-with-global-context
+  - whole-piece-generate-48-192
+  - masked-span-inpaint
+  - ending-complete
+  - recapitulation-revise
+hardware:
+  local: Apple-Silicon-development-and-rendering
+  training: single-NVIDIA-48-80GB
+trainer:
+  adaptation: QLoRA-4bit-NF4
+  max_seq_length: 65536
+  complete_piece_truncation: forbidden
