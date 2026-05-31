@@ -49,6 +49,9 @@ class TrainConfig:
     max_example_characters: int | None = None
     max_seq_length: int = 65536
     loss_chunk_tokens: int = 256
+    structural_token_weight: float = 8.0
+    target_prefix_tokens: int = 64
+    target_prefix_weight: float = 4.0
     epochs: float = 1.0
     max_steps: int = -1
     learning_rate: float = 2e-4
@@ -116,6 +119,11 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "complete_piece_truncation_policy": "forbidden",
             "loss_strategy": "checkpointed chunked LM-head cross-entropy",
             "loss_chunk_tokens": config.loss_chunk_tokens,
+            "supervision_weighting": {
+                "structural_token_weight": config.structural_token_weight,
+                "target_prefix_tokens": config.target_prefix_tokens,
+                "target_prefix_weight": config.target_prefix_weight,
+            },
         },
         "runtime": {
             "required_packages": list(REQUIRED_RUNTIME_PACKAGES),
@@ -138,6 +146,12 @@ def _validate_config(config: TrainConfig) -> None:
         raise ValueError("max_seq_length must be positive")
     if config.loss_chunk_tokens < 1:
         raise ValueError("loss_chunk_tokens must be positive")
+    if config.structural_token_weight < 1:
+        raise ValueError("structural_token_weight must be at least 1")
+    if config.target_prefix_tokens < 0:
+        raise ValueError("target_prefix_tokens must be non-negative")
+    if config.target_prefix_weight < 1:
+        raise ValueError("target_prefix_weight must be at least 1")
     if config.max_steps == 0 or config.max_steps < -1:
         raise ValueError("max_steps must be -1 or positive")
     if config.gradient_accumulation_steps < 1:
@@ -221,7 +235,14 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
                 target_modules=list(DEFAULT_LORA_TARGETS),
             ),
         )
-    dataset = _tokenized_dataset(rows, tokenizer, config.max_seq_length)
+    dataset = _tokenized_dataset(
+        rows,
+        tokenizer,
+        config.max_seq_length,
+        structural_token_weight=config.structural_token_weight,
+        target_prefix_tokens=config.target_prefix_tokens,
+        target_prefix_weight=config.target_prefix_weight,
+    )
 
     class ChunkedCausalLMTrainer(Trainer):
         def training_step(self, model, inputs, num_items_in_batch=None):
@@ -294,7 +315,15 @@ def _selected_rows(
     return rows[:max_examples] if max_examples is not None else rows
 
 
-def _tokenized_dataset(rows, tokenizer, max_seq_length):
+def _tokenized_dataset(
+    rows,
+    tokenizer,
+    max_seq_length,
+    *,
+    structural_token_weight=8.0,
+    target_prefix_tokens=64,
+    target_prefix_weight=4.0,
+):
     class ScoreDataset:
         def __len__(self):
             return len(rows)
@@ -303,6 +332,13 @@ def _tokenized_dataset(rows, tokenizer, max_seq_length):
             row = rows[index]
             prompt_ids = tokenizer(_model_prompt(row), add_special_tokens=False)["input_ids"]
             target_ids = tokenizer(row["target_scoredsl"], add_special_tokens=False)["input_ids"]
+            target_loss_weights = _target_loss_weights(
+                target_ids,
+                tokenizer,
+                structural_token_weight=structural_token_weight,
+                target_prefix_tokens=target_prefix_tokens,
+                target_prefix_weight=target_prefix_weight,
+            )
             input_ids = prompt_ids + target_ids + [tokenizer.eos_token_id]
             if len(input_ids) > max_seq_length:
                 raise ValueError(
@@ -313,6 +349,7 @@ def _tokenized_dataset(rows, tokenizer, max_seq_length):
                 "input_ids": input_ids,
                 "attention_mask": [1] * len(input_ids),
                 "labels": [-100] * len(prompt_ids) + target_ids + [tokenizer.eos_token_id],
+                "loss_weights": [0.0] * len(prompt_ids) + target_loss_weights + [structural_token_weight],
             }
 
     return ScoreDataset()
@@ -328,6 +365,9 @@ def _collator(tokenizer, torch):
                 [feature["attention_mask"] + [0] * (width - len(feature["attention_mask"])) for feature in features]
             ),
             "labels": torch.tensor([feature["labels"] + [-100] * (width - len(feature["labels"])) for feature in features]),
+            "loss_weights": torch.tensor(
+                [feature["loss_weights"] + [0.0] * (width - len(feature["loss_weights"])) for feature in features]
+            ),
         }
 
     return collate
@@ -351,29 +391,52 @@ def _checkpointed_chunked_causal_lm_loss(model, inputs, loss_chunk_tokens):
     outputs = backbone(**backbone_inputs, use_cache=False, return_dict=True)
     shifted_hidden_states = outputs.last_hidden_state[:, :-1, :]
     shifted_labels = inputs["labels"][:, 1:]
-    valid_token_count = shifted_labels.ne(-100).sum()
-    if not valid_token_count:
+    shifted_loss_weights = inputs["loss_weights"][:, 1:]
+    loss_weight_sum = shifted_loss_weights.sum()
+    if not loss_weight_sum:
         raise ValueError("Training batch contains no supervised target tokens")
 
-    def chunk_loss(hidden_states, labels):
+    def chunk_loss(hidden_states, labels, loss_weights):
         logits = lm_head(hidden_states).float()
-        return functional.cross_entropy(
+        token_losses = functional.cross_entropy(
             logits.reshape(-1, logits.shape[-1]),
             labels.reshape(-1),
             ignore_index=-100,
-            reduction="sum",
+            reduction="none",
         )
+        return (token_losses.reshape(labels.shape) * loss_weights).sum()
 
     losses = [
         checkpoint(
             chunk_loss,
             shifted_hidden_states[:, start : start + loss_chunk_tokens, :],
             shifted_labels[:, start : start + loss_chunk_tokens],
+            shifted_loss_weights[:, start : start + loss_chunk_tokens],
             use_reentrant=False,
         )
         for start in range(0, shifted_hidden_states.shape[1], loss_chunk_tokens)
     ]
-    return torch.stack(losses).sum() / valid_token_count
+    return torch.stack(losses).sum() / loss_weight_sum
+
+
+def _target_loss_weights(
+    target_ids,
+    tokenizer,
+    *,
+    structural_token_weight,
+    target_prefix_tokens,
+    target_prefix_weight,
+):
+    weights = [1.0] * len(target_ids)
+    for index in range(min(target_prefix_tokens, len(weights))):
+        weights[index] = max(weights[index], target_prefix_weight)
+    for tag in SCOREDLS_TOKENS[:8]:
+        tag_ids = tokenizer(tag, add_special_tokens=False)["input_ids"]
+        for start in range(len(target_ids) - len(tag_ids) + 1):
+            if target_ids[start : start + len(tag_ids)] == tag_ids:
+                for index in range(start, start + len(tag_ids)):
+                    weights[index] = max(weights[index], structural_token_weight)
+    return weights
 
 
 def _configure_memory_efficient_sdpa(torch):
@@ -470,6 +533,9 @@ def _launch_command(config: TrainConfig) -> str:
         f" --split {config.split}"
         f" --max-seq-length {config.max_seq_length}"
         f" --loss-chunk-tokens {config.loss_chunk_tokens}"
+        f" --structural-token-weight {config.structural_token_weight}"
+        f" --target-prefix-tokens {config.target_prefix_tokens}"
+        f" --target-prefix-weight {config.target_prefix_weight}"
         f" --epochs {config.epochs}"
         f"{resume}"
         f"{tasks}"
@@ -499,6 +565,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-example-characters", type=int, help="Exclude larger examples without truncating targets")
     parser.add_argument("--max-seq-length", type=int, default=65536)
     parser.add_argument("--loss-chunk-tokens", type=int, default=256)
+    parser.add_argument("--structural-token-weight", type=float, default=8.0)
+    parser.add_argument("--target-prefix-tokens", type=int, default=64)
+    parser.add_argument("--target-prefix-weight", type=float, default=4.0)
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--max-steps", type=int, default=-1, help="Override epoch count with a bounded optimizer-step run")
     parser.add_argument("--learning-rate", type=float, default=2e-4)
@@ -521,6 +590,9 @@ def main() -> None:
         max_example_characters=args.max_example_characters,
         max_seq_length=args.max_seq_length,
         loss_chunk_tokens=args.loss_chunk_tokens,
+        structural_token_weight=args.structural_token_weight,
+        target_prefix_tokens=args.target_prefix_tokens,
+        target_prefix_weight=args.target_prefix_weight,
         epochs=args.epochs,
         max_steps=args.max_steps,
         learning_rate=args.learning_rate,

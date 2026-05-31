@@ -35,7 +35,7 @@ from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
 from midi_llm.score_ir import validate_score
 from midi_llm.training import create_run_plan
-from midi_llm.train_scoredsl import TrainConfig, _validate_token_lengths, build_training_spec
+from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
 
 class ScoreFirstTest(unittest.TestCase):
@@ -686,6 +686,7 @@ class ScoreFirstTest(unittest.TestCase):
                 spec["model"]["attention_fallback_policy"],
                 "disable quadratic math SDPA fallback on CUDA",
             )
+            self.assertEqual(spec["model"]["supervision_weighting"]["structural_token_weight"], 8.0)
             self.assertIn("--loss-chunk-tokens 256", spec["launch_command"])
 
     def test_training_spec_can_bound_a_real_sample_smoke_run(self):
@@ -722,6 +723,25 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIn("--max-example-characters 1000", spec["launch_command"])
             self.assertIn("--max-steps 1", spec["launch_command"])
             self.assertIn("--loss-chunk-tokens 128", spec["launch_command"])
+
+    def test_training_loss_weights_score_structure_and_target_prefix(self):
+        class CharacterTokenizer:
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": list(text)}
+
+        target_ids = list("x SCHEMA payload\nNOTE payload\n")
+        weights = _target_loss_weights(
+            target_ids,
+            CharacterTokenizer(),
+            structural_token_weight=8.0,
+            target_prefix_tokens=1,
+            target_prefix_weight=4.0,
+        )
+        self.assertEqual(weights[0], 4.0)
+        schema_start = target_ids.index("S")
+        note_start = "".join(target_ids).index("NOTE")
+        self.assertTrue(all(weight == 8.0 for weight in weights[schema_start : schema_start + len("SCHEMA")]))
+        self.assertTrue(all(weight == 8.0 for weight in weights[note_start : note_start + len("NOTE")]))
 
     def test_cloud_bundle_excludes_score_cache_and_verifies_before_extract(self):
         with tempfile.TemporaryDirectory() as raw_dir:

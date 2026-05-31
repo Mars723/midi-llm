@@ -67,7 +67,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         seed = args.seed + index
         print(f"Sampling checkpoint candidate {index + 1}/{args.candidates} with seed={seed}", flush=True)
         torch.manual_seed(seed)
-        encoded = tokenizer(prompt, return_tensors="pt")
+        encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
         encoded = {key: value.to(model.device) for key, value in encoded.items()}
         raw_path = candidate_dir / f"candidate_{index + 1}.raw.dsl"
         streamer = _CandidateFileStreamer(tokenizer, raw_path)
