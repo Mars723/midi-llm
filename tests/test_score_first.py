@@ -26,6 +26,7 @@ from midi_llm.fetch_pdmx import (
 from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
+    _ending_fragment_has_tonic,
     _measure_event_budget_exceeded,
     _resume_hierarchical_score,
     _section_model_input,
@@ -233,6 +234,15 @@ class ScoreFirstTest(unittest.TestCase):
             resumed = _resume_hierarchical_score(str(path), score.plan, score.motif_bank)
         self.assertEqual(resumed.metadata["completed_section_labels"], [first.label])
         self.assertEqual(resumed.notes, partial.notes)
+
+    def test_ending_fragment_requires_planned_tonic(self):
+        score, _ = self.build_score()
+        self.assertTrue(_ending_fragment_has_tonic(score))
+        final_measure = max(note.measure for note in score.notes)
+        for note in score.notes:
+            if note.measure == final_measure and note.staff == 1:
+                note.pitch += 1
+        self.assertFalse(_ending_fragment_has_tonic(score))
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:

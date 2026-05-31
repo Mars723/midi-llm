@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
-from .evaluate import _measure_repetition_metrics, evaluate_score
+from .evaluate import _measure_repetition_metrics, _tonic_pitch_class, evaluate_score
 from .gallery import write_gallery
 from .model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from .notation_analysis import intermediate_notation_constraints
@@ -521,6 +521,8 @@ def _score_fragment_from_continuation(
     measure_note_counts = Counter(note.measure for note in score.notes)
     if measure_note_counts and max(measure_note_counts.values()) > 64:
         errors.append("Generated fragment exceeds the per-measure notation event budget")
+    if allow_terminal_empty and not _ending_fragment_has_tonic(score):
+        errors.append("Generated ending fragment does not end on the planned tonic")
     repetition = _measure_repetition_metrics(score)
     realized_measure_count = len(realized_measures)
     if realized_measure_count >= 16 and repetition["unique_measure_signature_ratio"] < 0.25:
@@ -536,6 +538,17 @@ def _score_fragment_from_continuation(
     if errors:
         raise ValueError("; ".join(errors))
     return score
+
+
+def _ending_fragment_has_tonic(score: PianoScoreIR) -> bool:
+    if not score.notes:
+        return False
+    final_measure = max(note.measure for note in score.notes)
+    tonic = _tonic_pitch_class(score.plan.key)
+    return any(
+        note.measure == final_measure and note.staff == 1 and note.pitch % 12 == tonic
+        for note in score.notes
+    )
 
 
 def _score_from_continuation(
