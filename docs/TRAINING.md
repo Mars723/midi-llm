@@ -290,9 +290,11 @@ python -m midi_llm.generate_checkpoint \
 
 This path defaults to hierarchical sampling: each planned section reads the
 same whole-piece blueprint and motif bank plus the generated left neighbor,
-then the compiler merges sections into one complete score. Use
+samples two alternatives, selects the stronger local fragment, and then the
+compiler merges sections into one complete score. Override this with
+`--section-candidates`. Use
 `--strategy single-pass` only as a research comparison. Both paths reject
-malformed, truncated, continuously repeated, and short-period looped
+malformed, truncated, low-diversity, continuously repeated, and short-period looped
 candidates before rendering. The performance overlay still uses the v1 rules
 renderer. The pilot defaults to `temperature=0.8` and a light
 `repetition_penalty=1.01`; the sample helper exposes both through environment

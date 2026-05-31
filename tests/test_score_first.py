@@ -202,6 +202,7 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.repetition_penalty, 1.01)
         self.assertEqual(args.strategy, "hierarchical")
+        self.assertEqual(args.section_candidates, 2)
 
     def test_section_model_input_carries_global_plan_and_left_neighbor(self):
         score, _ = self.build_score()

@@ -303,6 +303,7 @@ def _sample_hierarchical_score(
     directions = []
     layout_hints = []
     section_completions = []
+    section_selections = []
     skipped_optional_rows = 0
     for section_index, section in enumerate(plan.sections, start=1):
         partial = PianoScoreIR(
@@ -312,25 +313,49 @@ def _sample_hierarchical_score(
             directions=directions,
             layout_hints=layout_hints,
         )
-        continuation = _sample_model_continuation(
-            _section_model_input(plan, motif_bank, section, partial),
-            section.start_measure,
-            section.end_measure,
-            tokenizer,
-            model,
-            torch,
-            args,
-            candidate_dir / f"candidate_{candidate_number}.section_{section_index}.raw.dsl",
-            seed + section_index - 1,
-            f"Candidate {candidate_number} section {section.label}",
+        fragments = []
+        fragment_failures = []
+        for attempt in range(1, args.section_candidates + 1):
+            attempt_seed = seed + (section_index - 1) * 100 + attempt - 1
+            try:
+                continuation = _sample_model_continuation(
+                    _section_model_input(plan, motif_bank, section, partial),
+                    section.start_measure,
+                    section.end_measure,
+                    tokenizer,
+                    model,
+                    torch,
+                    args,
+                    candidate_dir
+                    / f"candidate_{candidate_number}.section_{section_index}.attempt_{attempt}.raw.dsl",
+                    attempt_seed,
+                    f"Candidate {candidate_number} section {section.label} attempt {attempt}",
+                )
+                fragment = _score_fragment_from_continuation(
+                    continuation,
+                    plan,
+                    motif_bank,
+                    adapter_dir,
+                    [section.start_measure, section.end_measure],
+                    allow_terminal_empty=section_index == len(plan.sections),
+                )
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                fragment_failures.append({"attempt": attempt, "seed": attempt_seed, "reason": str(error)})
+                continue
+            fragments.append((_fragment_quality_score(fragment), attempt, attempt_seed, fragment))
+        if not fragments:
+            raise ValueError(
+                f"Candidate {candidate_number} section {section.label} produced no valid alternatives: "
+                f"{json.dumps(fragment_failures, sort_keys=True)}"
+            )
+        quality_score, selected_attempt, selected_seed, fragment = max(
+            fragments,
+            key=lambda item: (item[0], -item[1]),
         )
-        fragment = _score_fragment_from_continuation(
-            continuation,
-            plan,
-            motif_bank,
-            adapter_dir,
-            [section.start_measure, section.end_measure],
-            allow_terminal_empty=section_index == len(plan.sections),
+        print(
+            f"Candidate {candidate_number} section {section.label} selected attempt {selected_attempt} "
+            f"seed={selected_seed} quality={quality_score:.3f}",
+            flush=True,
         )
         for note in fragment.notes:
             note.id = f"model-note-{len(notes) + 1}"
@@ -338,6 +363,16 @@ def _sample_hierarchical_score(
         directions.extend(fragment.directions)
         layout_hints.extend(fragment.layout_hints)
         section_completions.append(fragment.metadata["decode_completion"])
+        section_selections.append(
+            {
+                "label": section.label,
+                "attempt": selected_attempt,
+                "seed": selected_seed,
+                "quality_score": quality_score,
+                "valid_alternatives": len(fragments),
+                "failed_alternatives": fragment_failures,
+            }
+        )
         skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
     score = PianoScoreIR(
         plan=deepcopy(plan),
@@ -350,6 +385,7 @@ def _sample_hierarchical_score(
             "adapter_dir": adapter_dir,
             "decode_completion": "hierarchical-sections",
             "section_decode_completions": section_completions,
+            "section_selections": section_selections,
             "skipped_malformed_optional_rows": skipped_optional_rows,
             "generation_strategy": "hierarchical",
         },
@@ -360,6 +396,18 @@ def _sample_hierarchical_score(
     if errors:
         raise ValueError("; ".join(errors))
     return score
+
+
+def _fragment_quality_score(score: PianoScoreIR) -> float:
+    repetition = _measure_repetition_metrics(score)
+    measure_count = max(1, len({note.measure for note in score.notes}))
+    notes_per_measure = len(score.notes) / measure_count
+    return round(
+        repetition["unique_measure_signature_ratio"] * 100
+        - max(0, repetition["longest_identical_measure_run"] - 1) * 2
+        - abs(notes_per_measure - 14),
+        3,
+    )
 
 
 def _section_model_input(plan, motif_bank, section, partial_score: PianoScoreIR) -> Dict[str, Any]:
@@ -675,6 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--repetition-penalty", type=float, default=1.01)
     parser.add_argument("--strategy", choices=("hierarchical", "single-pass"), default="hierarchical")
+    parser.add_argument("--section-candidates", type=int, default=2)
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")
@@ -690,6 +739,8 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.candidates < 1:
         raise SystemExit("--candidates must be at least 1")
+    if args.section_candidates < 1:
+        raise SystemExit("--section-candidates must be at least 1")
     output_dir = generate_from_checkpoint(args)
     print(f"Checkpoint piece written to {output_dir.resolve()}")
     print(f"Gallery: {(output_dir / 'gallery.html').resolve()}")

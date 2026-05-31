@@ -23,6 +23,7 @@ python -m midi_llm.generate_checkpoint \
   --difficulty intermediate \
   --duration-minutes 3 \
   --candidates "${MIDI_LLM_SAMPLE_CANDIDATES:-2}" \
+  --section-candidates "${MIDI_LLM_SAMPLE_SECTION_CANDIDATES:-2}" \
   --temperature "${MIDI_LLM_SAMPLE_TEMPERATURE:-0.8}" \
   --repetition-penalty "${MIDI_LLM_SAMPLE_REPETITION_PENALTY:-1.01}" \
   --skip-musescore \
