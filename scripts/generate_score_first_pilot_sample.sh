@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VENV=${MIDI_LLM_VENV:-"$ROOT/.venv-score-first"}
 RUN_ROOT=${MIDI_LLM_RUN_ROOT:-"$ROOT/training_runs/score_first_intermediate_v2"}
 OUTPUT=${MIDI_LLM_SAMPLE_OUTPUT:-"$ROOT/generated_score_first/checkpoint_sample_001"}
-ADAPTER_DIR=${MIDI_LLM_SAMPLE_ADAPTER_DIR:-"$RUN_ROOT/07_diversity_whole_piece/adapter"}
+ADAPTER_DIR=${MIDI_LLM_SAMPLE_ADAPTER_DIR:-"$RUN_ROOT/08_balance_refinement/adapter"}
 
 if [[ ! -f "$VENV/bin/activate" ]]; then
   echo "Missing GPU environment: $VENV. Run scripts/bootstrap_score_first_gpu.sh first." >&2

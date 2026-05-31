@@ -267,8 +267,10 @@ bash scripts/run_score_first_stages.sh diversity
 
 It first teaches the v3 measure-interleaved grammar, then filters for
 notation-diverse source works with `--min-variation-score 0.55`, trains
-structural variation repair, and finishes with a whole-piece pass. The sample
-helper uses `07_diversity_whole_piece/adapter` by default. Override it with
+structural variation repair, runs a whole-piece pass, and finishes with a
+lower-learning-rate balanced refinement across grammar, local, repair,
+ending, and whole-piece tasks. The sample helper uses
+`08_balance_refinement/adapter` by default. Override it with
 `MIDI_LLM_SAMPLE_ADAPTER_DIR` only when comparing checkpoints.
 
 Use `bash scripts/run_score_first_stages.sh all` when running every phase
@@ -278,7 +280,7 @@ Generate a complete score sample from a trained adapter:
 
 ```bash
 python -m midi_llm.generate_checkpoint \
-  --adapter-dir training_runs/score_first_intermediate_v2/07_diversity_whole_piece/adapter \
+  --adapter-dir training_runs/score_first_intermediate_v2/08_balance_refinement/adapter \
   --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
   --genre nocturne \
   --form ABA \

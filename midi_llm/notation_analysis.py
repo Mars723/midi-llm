@@ -78,6 +78,9 @@ def intermediate_notation_constraints(plan: PiecePlanIR) -> Dict[str, Any]:
     return {
         "difficulty": plan.difficulty,
         "texture": plan.texture,
+        "preferred_notes_per_measure": 14,
+        "preferred_voice_count": 3,
+        "preferred_pitch_span": 42,
         "preferred_notes_per_measure_range": [8, 20],
         "preferred_voice_count_range": [2, 4],
         "preferred_pitch_span_range": [24, 60],

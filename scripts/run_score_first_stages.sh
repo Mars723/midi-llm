@@ -113,6 +113,16 @@ diversity_whole_piece() {
     --learning-rate "${MIDI_LLM_DIVERSITY_LEARNING_RATE:-0.0001}"
 }
 
+balance_refinement() {
+  run_stage \
+    08_balance_refinement \
+    score-dsl-autoencode,section-expand-16-64,masked-span-inpaint,recapitulation-revise,ending-complete,whole-piece-generate,section-variation-revise \
+    "${MIDI_LLM_BALANCE_REFINEMENT_EPOCHS:-1}" \
+    "$RUN_ROOT/07_diversity_whole_piece/adapter" \
+    --min-variation-score "${MIDI_LLM_MIN_VARIATION_SCORE:-0.55}" \
+    --learning-rate "${MIDI_LLM_BALANCE_REFINEMENT_LEARNING_RATE:-0.00005}"
+}
+
 case "${1:-pilot}" in
   smoke)
     smoke
@@ -137,6 +147,10 @@ case "${1:-pilot}" in
     v3_grammar
     diversity_structure
     diversity_whole_piece
+    balance_refinement
+    ;;
+  balance-refinement)
+    balance_refinement
     ;;
   all)
     smoke
@@ -147,9 +161,10 @@ case "${1:-pilot}" in
     v3_grammar
     diversity_structure
     diversity_whole_piece
+    balance_refinement
     ;;
   *)
-    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|balance-refinement|all}" >&2
     exit 2
     ;;
 esac
