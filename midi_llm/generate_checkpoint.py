@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Tuple
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
 from .evaluate import evaluate_score
 from .gallery import write_gallery
-from .model_scoredsl import decode_model_score
+from .model_scoredsl import decode_model_score, model_score_generation_prefix
 from .notation_analysis import intermediate_notation_constraints
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
@@ -77,7 +77,8 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     """Sample valid complete-piece ScoreDSL candidates and render the best score."""
 
     plan, motif_bank, controls = _requested_plan(args)
-    prompt = model_prompt(_whole_piece_model_input(plan, motif_bank))
+    generation_prefix = model_score_generation_prefix()
+    prompt = model_prompt(_whole_piece_model_input(plan, motif_bank)) + generation_prefix
     tokenizer, model, torch = _load_checkpoint(args.base_model, args.adapter_dir)
     output_dir = Path(args.output_dir or _default_output_dir())
     candidate_dir = output_dir / "candidates"
@@ -109,7 +110,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
             eos_token_id=tokenizer.eos_token_id,
         )
         generated_tokens = output[0][encoded["input_ids"].shape[1] :]
-        continuation = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+        continuation = generation_prefix + tokenizer.decode(generated_tokens, skip_special_tokens=False)
         print(f"Candidate {index + 1} sampled {generated_tokens.shape[0]} tokens", flush=True)
         raw_path.write_text(continuation, encoding="utf-8")
         try:

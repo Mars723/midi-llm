@@ -67,6 +67,12 @@ def encode_model_score(score: PianoScoreIR) -> str:
     return "\n".join(lines) + "\n"
 
 
+def model_score_generation_prefix(start_measure: int = 1) -> str:
+    """Return deterministic boilerplate that should not be sampled freely."""
+
+    return "\n".join((_line("SCORE", [MODEL_SCOREDLS_VERSION]), _line("MEASURE", [start_measure]))) + "\n"
+
+
 def decode_model_score(
     text: str,
     plan: PiecePlanIR,

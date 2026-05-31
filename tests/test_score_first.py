@@ -32,7 +32,7 @@ from midi_llm.generate_checkpoint import (
 )
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
-from midi_llm.model_scoredsl import decode_model_score, encode_model_score
+from midi_llm.model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from midi_llm.musicxml_score import import_musicxml_score
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
@@ -85,6 +85,12 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(
             sorted(tuple(asdict(direction).items()) for direction in decoded.directions),
             sorted(tuple(asdict(direction).items()) for direction in score.directions),
+        )
+
+    def test_model_generation_prefix_fixes_header_and_opening_measure(self):
+        self.assertEqual(
+            model_score_generation_prefix(),
+            'SCORE ["compact-measure-interleaved-v3"]\nMEASURE [1]\n',
         )
 
     def test_checkpoint_continuation_uses_requested_whole_piece_plan(self):
