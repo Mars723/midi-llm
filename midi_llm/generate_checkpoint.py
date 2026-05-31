@@ -154,6 +154,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         "attempted_candidate_count": args.candidates,
         "candidate_failures": failures,
         "decode_completion": score.metadata.get("decode_completion"),
+        "skipped_malformed_optional_rows": score.metadata.get("skipped_malformed_optional_rows", 0),
         "prompt": args.prompt,
         "controls": asdict(controls),
         "metrics": metrics,
@@ -231,7 +232,10 @@ def _score_from_continuation(
     motif_bank: MotifBank,
     adapter_dir: str,
 ) -> PianoScoreIR:
-    finalized, decode_completion = _finalize_model_continuation(continuation, plan.measure_count)
+    finalized, decode_completion, skipped_optional_rows = _finalize_model_continuation(
+        continuation,
+        plan.measure_count,
+    )
     score = decode_model_score(
         finalized,
         plan,
@@ -240,6 +244,7 @@ def _score_from_continuation(
             "score_source": "trained-scoredsl-adapter",
             "adapter_dir": adapter_dir,
             "decode_completion": decode_completion,
+            "skipped_malformed_optional_rows": skipped_optional_rows,
         },
     )
     errors = validate_score(score)
@@ -249,16 +254,20 @@ def _score_from_continuation(
     return score
 
 
-def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str]:
+def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str, int]:
     """Use a model terminator or trim the first complete event beyond the plan."""
 
     lines = []
     completion = None
+    skipped_optional_rows = 0
     for line in continuation.splitlines():
         if line == "END_SCORE":
             lines.append(line)
             completion = "model-end-score"
             break
+        if _is_malformed_optional_event(line):
+            skipped_optional_rows += 1
+            continue
         measure = _model_event_measure(line)
         if measure is not None and measure > final_measure:
             completion = "planned-measure-boundary"
@@ -268,7 +277,18 @@ def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple
         raise ValueError("Generated ScoreDSL does not contain END_SCORE or cross the planned final measure")
     if not lines or lines[-1] != "END_SCORE":
         lines.append("END_SCORE")
-    return "\n".join(lines) + "\n", completion
+    return "\n".join(lines) + "\n", completion, skipped_optional_rows
+
+
+def _is_malformed_optional_event(line: str) -> bool:
+    tag, separator, payload = line.partition(" ")
+    if not separator or tag not in ("DIRECTION", "LAYOUT"):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return True
+    return False
 
 
 def _model_event_measure(line: str) -> int | None:

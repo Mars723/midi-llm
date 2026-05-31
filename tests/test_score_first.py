@@ -135,6 +135,17 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(decoded.metadata["decode_completion"], "planned-measure-boundary")
         self.assertEqual(max(note.measure for note in decoded.notes), score.plan.measure_count)
 
+    def test_checkpoint_continuation_skips_only_malformed_optional_rows(self):
+        score, _ = self.build_score()
+        continuation = encode_model_score(score).replace(
+            "MEASURE [1]\n",
+            'MEASURE [1]\nDIRECTION [1,0.0,"words","Alto", slightly,null,null]\n',
+            1,
+        )
+        decoded = _score_from_continuation(continuation, score.plan, score.motif_bank, "training_runs/test/adapter")
+        self.assertEqual(decoded.metadata["skipped_malformed_optional_rows"], 1)
+        self.assertEqual(len(decoded.notes), len(score.notes))
+
     def test_checkpoint_continuation_rejects_measure_loop(self):
         score, _ = self.build_score()
         rows = ['SCORE ["compact-measure-interleaved-v3"]']
