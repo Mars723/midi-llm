@@ -74,6 +74,21 @@ class _PlanBoundaryStoppingCriteria:
         )
 
 
+class _MeasureEventBudgetStoppingCriteria:
+    """Stop a candidate that gets stuck emitting rows for one measure."""
+
+    def __init__(self, tokenizer, prompt_tokens: int, tail_tokens: int = 8192, max_event_rows: int = 64):
+        self.tokenizer = tokenizer
+        self.prompt_tokens = prompt_tokens
+        self.tail_tokens = tail_tokens
+        self.max_event_rows = max_event_rows
+
+    def __call__(self, input_ids, _scores, **_kwargs) -> bool:
+        start = max(self.prompt_tokens, input_ids.shape[1] - self.tail_tokens)
+        tail = self.tokenizer.decode(input_ids[0][start:], skip_special_tokens=False)
+        return _measure_event_budget_exceeded(tail, self.max_event_rows)
+
+
 def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     """Sample valid complete-piece ScoreDSL candidates and render the best score."""
 
@@ -255,7 +270,8 @@ def _sample_model_continuation(
         max_new_tokens=args.max_new_tokens,
         stop_strings=["END_SCORE"],
         stopping_criteria=[
-            _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], final_measure)
+            _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], final_measure),
+            _MeasureEventBudgetStoppingCriteria(tokenizer, encoded["input_ids"].shape[1]),
         ],
         tokenizer=tokenizer,
         streamer=streamer,
@@ -412,6 +428,9 @@ def _score_fragment_from_continuation(
         errors.append(f"Generated fragment does not realize final measure {end_measure}")
     if any(measure < start_measure or measure > end_measure for measure in realized_measures):
         errors.append(f"Generated fragment escapes target range {start_measure}-{end_measure}")
+    measure_note_counts = Counter(note.measure for note in score.notes)
+    if measure_note_counts and max(measure_note_counts.values()) > 64:
+        errors.append("Generated fragment exceeds the per-measure notation event budget")
     repetition = _measure_repetition_metrics(score)
     if (
         repetition["periodic_measure_loop_period"] is not None
@@ -519,6 +538,21 @@ def _model_event_measure(line: str) -> int | None:
     return data[0]
 
 
+def _measure_event_budget_exceeded(text: str, max_event_rows: int = 64) -> bool:
+    counts = Counter()
+    for line in text.splitlines():
+        tag, separator, _payload = line.partition(" ")
+        if not separator or tag not in ("NOTE", "DIRECTION", "LAYOUT"):
+            continue
+        measure = _model_event_measure(line)
+        if measure is None:
+            continue
+        counts[measure] += 1
+        if counts[measure] > max_event_rows:
+            return True
+    return False
+
+
 def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
     """Reject truncated or locally collapsed samples before rendering."""
 
@@ -567,6 +601,8 @@ def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
                 note.tie_stop,
             )
         )
+    if any(len(notes) > 64 for notes in notes_by_measure.values()):
+        errors.append("Generated score exceeds the per-measure notation event budget")
     max_measure_run = 0
     current_measure_run = 0
     prior_signature = None

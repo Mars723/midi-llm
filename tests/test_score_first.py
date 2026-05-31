@@ -26,6 +26,7 @@ from midi_llm.fetch_pdmx import (
 from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
+    _measure_event_budget_exceeded,
     _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
@@ -229,6 +230,11 @@ class ScoreFirstTest(unittest.TestCase):
             streamer.put(FakeTensor([3]))
             streamer.end()
             self.assertEqual(path.read_text(encoding="utf-8"), "123")
+
+    def test_checkpoint_stops_measure_event_overflow(self):
+        rows = [f"NOTE [1,{index}.0,0.5,60,1,1,null,null,false,false]" for index in range(4)]
+        self.assertFalse(_measure_event_budget_exceeded("\n".join(rows), max_event_rows=4))
+        self.assertTrue(_measure_event_budget_exceeded("\n".join(rows + [rows[0]]), max_event_rows=4))
 
     def test_performance_tempo_curve_does_not_leak_into_musicxml(self):
         score, performance = self.build_score()
