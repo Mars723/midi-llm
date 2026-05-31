@@ -134,9 +134,9 @@ class ScoreFirstTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identical measure content"):
             _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
 
-    def test_checkpoint_sampling_defaults_to_validated_low_temperature(self):
+    def test_checkpoint_sampling_defaults_to_validated_temperature(self):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
-        self.assertEqual(args.temperature, 0.5)
+        self.assertEqual(args.temperature, 0.8)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:

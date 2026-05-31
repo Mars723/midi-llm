@@ -376,7 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--title")
     parser.add_argument("--candidates", type=int, default=4)
     parser.add_argument("--seed", type=int, default=23)
-    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")
