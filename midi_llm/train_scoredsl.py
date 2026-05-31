@@ -48,6 +48,7 @@ class TrainConfig:
     max_examples: int | None = None
     max_example_characters: int | None = None
     max_seq_length: int = 65536
+    loss_chunk_tokens: int = 256
     epochs: float = 1.0
     max_steps: int = -1
     learning_rate: float = 2e-4
@@ -112,6 +113,8 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "scoredsl_tag_strings": list(SCOREDLS_TOKENS),
             "tokenizer_strategy": "reuse upstream BPE vocabulary; do not freeze randomly initialized added-token rows",
             "complete_piece_truncation_policy": "forbidden",
+            "loss_strategy": "checkpointed chunked LM-head cross-entropy",
+            "loss_chunk_tokens": config.loss_chunk_tokens,
         },
         "runtime": {
             "required_packages": list(REQUIRED_RUNTIME_PACKAGES),
@@ -132,6 +135,8 @@ def dependency_report() -> Dict[str, bool]:
 def _validate_config(config: TrainConfig) -> None:
     if config.max_seq_length < 1:
         raise ValueError("max_seq_length must be positive")
+    if config.loss_chunk_tokens < 1:
+        raise ValueError("loss_chunk_tokens must be positive")
     if config.max_steps == 0 or config.max_steps < -1:
         raise ValueError("max_steps must be -1 or positive")
     if config.gradient_accumulation_steps < 1:
@@ -214,7 +219,13 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             ),
         )
     dataset = _tokenized_dataset(rows, tokenizer, config.max_seq_length)
-    trainer = Trainer(
+
+    class ChunkedCausalLMTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            loss = _checkpointed_chunked_causal_lm_loss(model, inputs, config.loss_chunk_tokens)
+            return (loss, {"loss": loss}) if return_outputs else loss
+
+    trainer = ChunkedCausalLMTrainer(
         model=model,
         args=TrainingArguments(
             output_dir=config.output_dir,
@@ -314,6 +325,49 @@ def _collator(tokenizer, torch):
     return collate
 
 
+def _checkpointed_chunked_causal_lm_loss(model, inputs, loss_chunk_tokens):
+    """Compute full-context supervision without materializing full-sequence logits."""
+
+    import torch
+    import torch.nn.functional as functional
+    from torch.utils.checkpoint import checkpoint
+
+    causal_lm = model.get_base_model() if hasattr(model, "get_base_model") else model
+    backbone = causal_lm.model
+    lm_head = causal_lm.lm_head
+    backbone_inputs = {
+        key: inputs[key]
+        for key in ("input_ids", "attention_mask", "position_ids")
+        if key in inputs
+    }
+    outputs = backbone(**backbone_inputs, use_cache=False, return_dict=True)
+    shifted_hidden_states = outputs.last_hidden_state[:, :-1, :]
+    shifted_labels = inputs["labels"][:, 1:]
+    valid_token_count = shifted_labels.ne(-100).sum()
+    if not valid_token_count:
+        raise ValueError("Training batch contains no supervised target tokens")
+
+    def chunk_loss(hidden_states, labels):
+        logits = lm_head(hidden_states).float()
+        return functional.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]),
+            labels.reshape(-1),
+            ignore_index=-100,
+            reduction="sum",
+        )
+
+    losses = [
+        checkpoint(
+            chunk_loss,
+            shifted_hidden_states[:, start : start + loss_chunk_tokens, :],
+            shifted_labels[:, start : start + loss_chunk_tokens],
+            use_reentrant=False,
+        )
+        for start in range(0, shifted_hidden_states.shape[1], loss_chunk_tokens)
+    ]
+    return torch.stack(losses).sum() / valid_token_count
+
+
 def _validate_token_lengths(rows, tokenizer, max_seq_length):
     task_maximums: Dict[str, int] = {}
     longest = []
@@ -399,6 +453,7 @@ def _launch_command(config: TrainConfig) -> str:
         f" --base-model {config.base_model}"
         f" --split {config.split}"
         f" --max-seq-length {config.max_seq_length}"
+        f" --loss-chunk-tokens {config.loss_chunk_tokens}"
         f" --epochs {config.epochs}"
         f"{resume}"
         f"{tasks}"
@@ -427,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-examples", type=int, help="Select at most this many examples after task filtering")
     parser.add_argument("--max-example-characters", type=int, help="Exclude larger examples without truncating targets")
     parser.add_argument("--max-seq-length", type=int, default=65536)
+    parser.add_argument("--loss-chunk-tokens", type=int, default=256)
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--max-steps", type=int, default=-1, help="Override epoch count with a bounded optimizer-step run")
     parser.add_argument("--learning-rate", type=float, default=2e-4)
@@ -448,6 +504,7 @@ def main() -> None:
         max_examples=args.max_examples,
         max_example_characters=args.max_example_characters,
         max_seq_length=args.max_seq_length,
+        loss_chunk_tokens=args.loss_chunk_tokens,
         epochs=args.epochs,
         max_steps=args.max_steps,
         learning_rate=args.learning_rate,

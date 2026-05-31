@@ -647,6 +647,9 @@ class ScoreFirstTest(unittest.TestCase):
             )
             self.assertEqual(spec["model"]["resume_adapter_dir"], "training_runs/01_grammar/adapter")
             self.assertIn("--resume-adapter-dir training_runs/01_grammar/adapter", spec["launch_command"])
+            self.assertEqual(spec["model"]["loss_strategy"], "checkpointed chunked LM-head cross-entropy")
+            self.assertEqual(spec["model"]["loss_chunk_tokens"], 256)
+            self.assertIn("--loss-chunk-tokens 256", spec["launch_command"])
 
     def test_training_spec_can_bound_a_real_sample_smoke_run(self):
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -673,6 +676,7 @@ class ScoreFirstTest(unittest.TestCase):
                     max_examples=2,
                     max_example_characters=1000,
                     max_steps=1,
+                    loss_chunk_tokens=128,
                     gradient_accumulation_steps=1,
                 )
             )
@@ -680,6 +684,7 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIn("--max-examples 2", spec["launch_command"])
             self.assertIn("--max-example-characters 1000", spec["launch_command"])
             self.assertIn("--max-steps 1", spec["launch_command"])
+            self.assertIn("--loss-chunk-tokens 128", spec["launch_command"])
 
     def test_cloud_bundle_excludes_score_cache_and_verifies_before_extract(self):
         with tempfile.TemporaryDirectory() as raw_dir:

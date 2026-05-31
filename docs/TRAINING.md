@@ -158,6 +158,10 @@ to silently truncate any target when `max_seq_length` is too small. The
 dry-run character-based token estimate is an early warning only; before the
 cloud launcher loads the model, it tokenizes every selected example and
 rejects the launch if the real tokenizer count exceeds the context budget.
+Because the upstream MIDI-LLM tokenizer has a large vocabulary, the launcher
+keeps full Transformer context but computes the LM head and cross-entropy in
+checkpointed `256`-token chunks by default. Override this with
+`--loss-chunk-tokens` only after a representative long-context probe.
 
 ## GPU Host Handoff
 
