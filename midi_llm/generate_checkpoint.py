@@ -32,6 +32,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     failures = []
     for index in range(args.candidates):
         seed = args.seed + index
+        print(f"Sampling checkpoint candidate {index + 1}/{args.candidates} with seed={seed}", flush=True)
         torch.manual_seed(seed)
         encoded = tokenizer(prompt, return_tensors="pt")
         encoded = {key: value.to(model.device) for key, value in encoded.items()}
@@ -41,10 +42,14 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
             temperature=args.temperature,
             top_p=args.top_p,
             max_new_tokens=args.max_new_tokens,
+            stop_strings=["END_SCORE"],
+            tokenizer=tokenizer,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-        continuation = tokenizer.decode(output[0][encoded["input_ids"].shape[1] :], skip_special_tokens=False)
+        generated_tokens = output[0][encoded["input_ids"].shape[1] :]
+        continuation = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+        print(f"Candidate {index + 1} sampled {generated_tokens.shape[0]} tokens", flush=True)
         (candidate_dir / f"candidate_{index + 1}.raw.dsl").write_text(continuation, encoding="utf-8")
         try:
             score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
@@ -188,7 +193,7 @@ def _load_checkpoint(base_model: str, adapter_dir: str):
     tokenizer = AutoTokenizer.from_pretrained(adapter_dir, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(base_model, device_map="auto", torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(base_model, device_map="auto", dtype=torch.bfloat16)
     model = PeftModel.from_pretrained(model, adapter_dir)
     model.eval()
     return tokenizer, model, torch
