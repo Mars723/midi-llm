@@ -19,6 +19,39 @@ from .score_ir import MotifBank, PianoScoreIR, PiecePlanIR, validate_score, writ
 from .train_scoredsl import model_prompt
 
 
+class _CandidateFileStreamer:
+    """Persist incremental candidate text so long checkpoint samples stay observable."""
+
+    def __init__(self, tokenizer, path: Path, report_every: int = 1024):
+        self.tokenizer = tokenizer
+        self.path = path
+        self.report_every = report_every
+        self.token_ids: List[int] = []
+        self.prompt_received = False
+        self.next_report = report_every
+
+    def put(self, value) -> None:
+        token_ids = value.detach().cpu().reshape(-1).tolist()
+        if not self.prompt_received:
+            self.prompt_received = True
+            return
+        self.token_ids.extend(token_ids)
+        if len(self.token_ids) >= self.next_report:
+            self._flush()
+            print(f"Streamed {len(self.token_ids)} candidate tokens to {self.path}", flush=True)
+            while self.next_report <= len(self.token_ids):
+                self.next_report += self.report_every
+
+    def end(self) -> None:
+        self._flush()
+
+    def _flush(self) -> None:
+        self.path.write_text(
+            self.tokenizer.decode(self.token_ids, skip_special_tokens=False),
+            encoding="utf-8",
+        )
+
+
 def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     """Sample valid complete-piece ScoreDSL candidates and render the best score."""
 
@@ -36,6 +69,8 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         torch.manual_seed(seed)
         encoded = tokenizer(prompt, return_tensors="pt")
         encoded = {key: value.to(model.device) for key, value in encoded.items()}
+        raw_path = candidate_dir / f"candidate_{index + 1}.raw.dsl"
+        streamer = _CandidateFileStreamer(tokenizer, raw_path)
         output = model.generate(
             **encoded,
             do_sample=True,
@@ -44,13 +79,14 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
             max_new_tokens=args.max_new_tokens,
             stop_strings=["END_SCORE"],
             tokenizer=tokenizer,
+            streamer=streamer,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
         generated_tokens = output[0][encoded["input_ids"].shape[1] :]
         continuation = tokenizer.decode(generated_tokens, skip_special_tokens=False)
         print(f"Candidate {index + 1} sampled {generated_tokens.shape[0]} tokens", flush=True)
-        (candidate_dir / f"candidate_{index + 1}.raw.dsl").write_text(continuation, encoding="utf-8")
+        raw_path.write_text(continuation, encoding="utf-8")
         try:
             score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
             performance = render_performance(score, seed=seed + 10_000)

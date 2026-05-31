@@ -23,7 +23,7 @@ from midi_llm.fetch_pdmx import (
     _validate_coverage,
 )
 from midi_llm.gallery import write_gallery
-from midi_llm.generate_checkpoint import _score_from_continuation, _whole_piece_model_input
+from midi_llm.generate_checkpoint import _CandidateFileStreamer, _score_from_continuation, _whole_piece_model_input
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.musicxml_score import import_musicxml_score
@@ -79,6 +79,39 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(decoded.plan, score.plan)
         self.assertEqual(decoded.notes, score.notes)
         self.assertEqual(decoded.metadata["score_source"], "trained-scoredsl-adapter")
+
+    def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
+        class FakeTensor:
+            def __init__(self, values):
+                self.values = values
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def reshape(self, *_shape):
+                return self
+
+            def tolist(self):
+                return self.values
+
+        class FakeTokenizer:
+            def decode(self, values, skip_special_tokens=False):
+                return "".join(str(value) for value in values)
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "candidate.raw.dsl"
+            streamer = _CandidateFileStreamer(FakeTokenizer(), path, report_every=2)
+            streamer.put(FakeTensor([90, 91]))
+            streamer.put(FakeTensor([1]))
+            self.assertFalse(path.exists())
+            streamer.put(FakeTensor([2]))
+            self.assertEqual(path.read_text(encoding="utf-8"), "12")
+            streamer.put(FakeTensor([3]))
+            streamer.end()
+            self.assertEqual(path.read_text(encoding="utf-8"), "123")
 
     def test_performance_tempo_curve_does_not_leak_into_musicxml(self):
         score, performance = self.build_score()
