@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter, defaultdict
 from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
-from collections import Counter
 from typing import Any, Dict, List, Tuple
 
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
@@ -54,6 +54,24 @@ class _CandidateFileStreamer:
         )
 
 
+class _PlanBoundaryStoppingCriteria:
+    """Stop after the model emits the first complete event beyond the plan."""
+
+    def __init__(self, tokenizer, prompt_tokens: int, final_measure: int, tail_tokens: int = 512):
+        self.tokenizer = tokenizer
+        self.prompt_tokens = prompt_tokens
+        self.final_measure = final_measure
+        self.tail_tokens = tail_tokens
+
+    def __call__(self, input_ids, _scores, **_kwargs) -> bool:
+        start = max(self.prompt_tokens, input_ids.shape[1] - self.tail_tokens)
+        tail = self.tokenizer.decode(input_ids[0][start:], skip_special_tokens=False)
+        return any(
+            measure is not None and measure > self.final_measure
+            for measure in (_model_event_measure(line) for line in tail.splitlines())
+        )
+
+
 def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     """Sample valid complete-piece ScoreDSL candidates and render the best score."""
 
@@ -80,6 +98,9 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
             top_p=args.top_p,
             max_new_tokens=args.max_new_tokens,
             stop_strings=["END_SCORE"],
+            stopping_criteria=[
+                _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], plan.measure_count)
+            ],
             tokenizer=tokenizer,
             streamer=streamer,
             pad_token_id=tokenizer.pad_token_id,
@@ -127,6 +148,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         "valid_candidate_count": len(candidates),
         "attempted_candidate_count": args.candidates,
         "candidate_failures": failures,
+        "decode_completion": score.metadata.get("decode_completion"),
         "prompt": args.prompt,
         "controls": asdict(controls),
         "metrics": metrics,
@@ -203,20 +225,57 @@ def _score_from_continuation(
     motif_bank: MotifBank,
     adapter_dir: str,
 ) -> PianoScoreIR:
-    end = continuation.find("END_SCORE")
-    if end < 0:
-        raise ValueError("Generated ScoreDSL does not contain END_SCORE")
+    finalized, decode_completion = _finalize_model_continuation(continuation, plan.measure_count)
     score = decode_model_score(
-        continuation[: end + len("END_SCORE")],
+        finalized,
         plan,
         motif_bank,
-        metadata={"score_source": "trained-scoredsl-adapter", "adapter_dir": adapter_dir},
+        metadata={
+            "score_source": "trained-scoredsl-adapter",
+            "adapter_dir": adapter_dir,
+            "decode_completion": decode_completion,
+        },
     )
     errors = validate_score(score)
     errors.extend(_validate_generated_whole_piece(score))
     if errors:
         raise ValueError("; ".join(errors))
     return score
+
+
+def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str]:
+    """Use a model terminator or trim the first complete event beyond the plan."""
+
+    lines = []
+    completion = None
+    for line in continuation.splitlines():
+        if line == "END_SCORE":
+            lines.append(line)
+            completion = "model-end-score"
+            break
+        measure = _model_event_measure(line)
+        if measure is not None and measure > final_measure:
+            completion = "planned-measure-boundary"
+            break
+        lines.append(line)
+    if completion is None:
+        raise ValueError("Generated ScoreDSL does not contain END_SCORE or cross the planned final measure")
+    if not lines or lines[-1] != "END_SCORE":
+        lines.append("END_SCORE")
+    return "\n".join(lines) + "\n", completion
+
+
+def _model_event_measure(line: str) -> int | None:
+    tag, separator, payload = line.partition(" ")
+    if not separator or tag not in ("NOTE", "DIRECTION", "LAYOUT"):
+        return None
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list) or not data or not isinstance(data[0], int):
+        return None
+    return data[0]
 
 
 def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
@@ -252,6 +311,31 @@ def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
     )
     if note_rows and max(note_rows.values()) > 8:
         errors.append("Generated score repeats an identical notation row more than 8 times")
+    notes_by_measure = defaultdict(list)
+    for note in score.notes:
+        notes_by_measure[note.measure].append(
+            (
+                note.beat,
+                note.duration,
+                note.pitch,
+                note.staff,
+                note.voice,
+                note.articulation,
+                note.fingering,
+                note.tie_start,
+                note.tie_stop,
+            )
+        )
+    max_measure_run = 0
+    current_measure_run = 0
+    prior_signature = None
+    for measure in sorted(notes_by_measure):
+        signature = tuple(notes_by_measure[measure])
+        current_measure_run = current_measure_run + 1 if signature == prior_signature else 1
+        prior_signature = signature
+        max_measure_run = max(max_measure_run, current_measure_run)
+    if len(notes_by_measure) >= 16 and max_measure_run / len(notes_by_measure) > 0.65:
+        errors.append("Generated score repeats identical measure content across most of the piece")
     return errors
 
 

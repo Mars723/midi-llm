@@ -113,6 +113,27 @@ class ScoreFirstTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "planned final measure"):
             _score_from_continuation(truncated, score.plan, score.motif_bank, "training_runs/test/adapter")
 
+    def test_checkpoint_continuation_completes_at_planned_measure_boundary(self):
+        score, _ = self.build_score()
+        continuation = encode_model_score(score).replace(
+            "END_SCORE\n",
+            f"NOTE [{score.plan.measure_count + 1},0.0,1.0,60,1,1,null,null,false,false]\n",
+        )
+        decoded = _score_from_continuation(continuation, score.plan, score.motif_bank, "training_runs/test/adapter")
+        self.assertEqual(decoded.metadata["decode_completion"], "planned-measure-boundary")
+        self.assertEqual(max(note.measure for note in decoded.notes), score.plan.measure_count)
+
+    def test_checkpoint_continuation_rejects_measure_loop(self):
+        score, _ = self.build_score()
+        rows = ['SCORE ["compact-fixed-columns-v2"]']
+        rows.extend(
+            f"NOTE [{measure},0.0,1.0,60,1,1,null,null,false,false]"
+            for measure in range(1, score.plan.measure_count + 1)
+        )
+        rows.append("END_SCORE")
+        with self.assertRaisesRegex(ValueError, "identical measure content"):
+            _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
+
     def test_checkpoint_sampling_defaults_to_validated_low_temperature(self):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
         self.assertEqual(args.temperature, 0.5)
