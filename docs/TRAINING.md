@@ -275,7 +275,9 @@ This path samples compact model-facing ScoreDSL notes from the adapter, rejects
 malformed, truncated, and locally collapsed candidates, keeps the requested
 whole-piece plan authoritative, and renders the selected complete score to the
 same Gallery artifacts as the local baseline. The performance overlay still
-uses the v1 rules renderer.
+uses the v1 rules renderer. The pilot defaults to `temperature=0.8` and a light
+`repetition_penalty=1.01`; the sample helper exposes both through environment
+variables for checkpoint comparisons.
 
 ## Complete-Piece Release Gate
 

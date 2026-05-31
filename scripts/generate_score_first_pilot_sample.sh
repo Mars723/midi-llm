@@ -24,6 +24,7 @@ python -m midi_llm.generate_checkpoint \
   --duration-minutes 3 \
   --candidates "${MIDI_LLM_SAMPLE_CANDIDATES:-2}" \
   --temperature "${MIDI_LLM_SAMPLE_TEMPERATURE:-0.8}" \
+  --repetition-penalty "${MIDI_LLM_SAMPLE_REPETITION_PENALTY:-1.01}" \
   --skip-musescore \
   --output-dir "$OUTPUT"
 

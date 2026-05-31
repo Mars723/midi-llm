@@ -137,6 +137,7 @@ class ScoreFirstTest(unittest.TestCase):
     def test_checkpoint_sampling_defaults_to_validated_temperature(self):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
         self.assertEqual(args.temperature, 0.8)
+        self.assertEqual(args.repetition_penalty, 1.01)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:

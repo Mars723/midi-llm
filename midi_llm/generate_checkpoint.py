@@ -96,6 +96,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
             do_sample=True,
             temperature=args.temperature,
             top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
             max_new_tokens=args.max_new_tokens,
             stop_strings=["END_SCORE"],
             stopping_criteria=[
@@ -380,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--repetition-penalty", type=float, default=1.01)
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")
