@@ -269,8 +269,10 @@ It first teaches the v3 measure-interleaved grammar, then filters for
 notation-diverse source works with `--min-variation-score 0.55`, trains
 structural variation repair, runs a whole-piece pass, and finishes with a
 lower-learning-rate balanced refinement across grammar, local, repair,
-ending, and whole-piece tasks. The sample helper uses
-`08_balance_refinement/adapter` by default. Override it with
+ending, and whole-piece tasks. It then runs `09_two_staff_refinement` with
+`--min-lower-staff-measure-coverage 0.75` so accompaniment textures retain
+active lower-staff notation. The sample helper uses
+`09_two_staff_refinement/adapter` by default. Override it with
 `MIDI_LLM_SAMPLE_ADAPTER_DIR` only when comparing checkpoints.
 
 Use `bash scripts/run_score_first_stages.sh all` when running every phase
@@ -280,7 +282,7 @@ Generate a complete score sample from a trained adapter:
 
 ```bash
 python -m midi_llm.generate_checkpoint \
-  --adapter-dir training_runs/score_first_intermediate_v2/08_balance_refinement/adapter \
+  --adapter-dir training_runs/score_first_intermediate_v2/09_two_staff_refinement/adapter \
   --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
   --genre nocturne \
   --form ABA \
@@ -323,7 +325,8 @@ The command emits `automatic_results.csv`, `release_gate.json`,
 piece's paginated score Gallery, PDF, MusicXML, score MIDI, and expressive MIDI.
 The automated report checks duration error, section coverage, planned endings,
 MusicXML parsing, MuseScore PDF/PNG export, control accuracy, and
-expressive-tempo isolation. The human worksheet keeps the required 50-piece
+expressive-tempo isolation. Accompaniment textures must also cover both
+piano staves across the piece. The human worksheet keeps the required 50-piece
 musical review explicit. `sonata-allegro` is reported separately and does not
 block v1.
 

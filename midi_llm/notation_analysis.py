@@ -8,6 +8,12 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 from .score_ir import NoteEvent, PianoScoreIR, PiecePlanIR
 
+TWO_STAFF_TEXTURES = {
+    "melody-with-accompaniment",
+    "melody-with-chordal-accompaniment",
+    "multi-voice-piano",
+}
+
 
 def analyze_notation(score: PianoScoreIR) -> Dict[str, Any]:
     """Summarize texture, markings, and measure-level variation for training controls."""
@@ -18,6 +24,7 @@ def analyze_notation(score: PianoScoreIR) -> Dict[str, Any]:
     longest_run = _longest_identical_run(signatures)
     pitch_span = _pitch_span(score.notes)
     voice_count = len({(note.staff, note.voice) for note in score.notes})
+    staff_coverage = staff_measure_coverage(score.notes, score.plan.measure_count)
     section_profiles = [
         _section_profile(score.notes, section.label, section.role, section.start_measure, section.end_measure)
         for section in score.plan.sections
@@ -41,6 +48,9 @@ def analyze_notation(score: PianoScoreIR) -> Dict[str, Any]:
         "note_count": len(score.notes),
         "notes_per_measure": round(mean(densities), 3) if densities else 0.0,
         "voice_count": voice_count,
+        "upper_staff_measure_coverage": staff_coverage[1],
+        "lower_staff_measure_coverage": staff_coverage[2],
+        "minimum_staff_measure_coverage": min(staff_coverage.values()),
         "pitch_span": pitch_span,
         "marking_families": sorted(score.plan.markings),
         "unique_measure_signatures": len(set(signatures)),
@@ -64,6 +74,8 @@ def notation_constraints_from_profile(profile: Dict[str, Any], difficulty: str) 
         "preferred_notes_per_measure": profile["notes_per_measure"],
         "preferred_voice_count": profile["voice_count"],
         "preferred_pitch_span": profile["pitch_span"],
+        "minimum_upper_staff_measure_coverage": profile["upper_staff_measure_coverage"],
+        "minimum_lower_staff_measure_coverage": profile["lower_staff_measure_coverage"],
         "required_marking_families": profile["marking_families"],
         "minimum_unique_measure_signature_ratio": profile["unique_measure_signature_ratio"],
         "maximum_identical_measure_run": profile["longest_identical_measure_run"],
@@ -84,6 +96,8 @@ def intermediate_notation_constraints(plan: PiecePlanIR) -> Dict[str, Any]:
         "preferred_notes_per_measure_range": [8, 20],
         "preferred_voice_count_range": [2, 4],
         "preferred_pitch_span_range": [24, 60],
+        "minimum_upper_staff_measure_coverage": 0.75,
+        "minimum_lower_staff_measure_coverage": 0.75,
         "required_marking_families": sorted(plan.markings),
         "minimum_unique_measure_signature_ratio": 0.45,
         "maximum_identical_measure_run": 8,
@@ -127,6 +141,22 @@ def infer_texture(notes: Sequence[NoteEvent]) -> str:
     if chord_ratio >= 0.30:
         return "single-staff-chordal"
     return "single-staff-melodic"
+
+
+def staff_measure_coverage(notes: Sequence[NoteEvent], measure_count: int) -> Dict[int, float]:
+    """Return the fraction of planned measures with notation on each piano staff."""
+
+    return {
+        staff: round(
+            len({note.measure for note in notes if note.staff == staff}) / max(1, measure_count),
+            4,
+        )
+        for staff in (1, 2)
+    }
+
+
+def requires_two_staff_texture(texture: str) -> bool:
+    return texture in TWO_STAFF_TEXTURES
 
 
 def _measure_signatures(notes: Sequence[NoteEvent], measure_count: int) -> List[Tuple[Tuple[Any, ...], ...]]:

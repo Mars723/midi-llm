@@ -42,6 +42,7 @@ class TrainConfig:
     max_examples: int | None = None
     max_example_characters: int | None = None
     min_variation_score: float | None = None
+    min_lower_staff_measure_coverage: float | None = None
     max_seq_length: int = 81920
     loss_chunk_tokens: int = 256
     structural_token_weight: float = 8.0
@@ -74,6 +75,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
         max_examples=config.max_examples,
         max_example_characters=config.max_example_characters,
         min_variation_score=config.min_variation_score,
+        min_lower_staff_measure_coverage=config.min_lower_staff_measure_coverage,
     )
     lengths = [_character_length(row) for row in rows]
     estimated_tokens = math.ceil(max(lengths, default=0) / 3)
@@ -155,6 +157,11 @@ def _validate_config(config: TrainConfig) -> None:
         raise ValueError("gradient_accumulation_steps must be positive")
     if config.min_variation_score is not None and not 0 <= config.min_variation_score <= 1:
         raise ValueError("min_variation_score must be between 0 and 1")
+    if (
+        config.min_lower_staff_measure_coverage is not None
+        and not 0 <= config.min_lower_staff_measure_coverage <= 1
+    ):
+        raise ValueError("min_lower_staff_measure_coverage must be between 0 and 1")
 
 
 def run_training(config: TrainConfig) -> Dict[str, Any]:
@@ -168,6 +175,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         max_examples=config.max_examples,
         max_example_characters=config.max_example_characters,
         min_variation_score=config.min_variation_score,
+        min_lower_staff_measure_coverage=config.min_lower_staff_measure_coverage,
     )
     if not rows:
         raise RuntimeError(f"No examples selected from split {config.split!r}")
@@ -298,6 +306,7 @@ def _selected_rows(
     max_examples: int | None = None,
     max_example_characters: int | None = None,
     min_variation_score: float | None = None,
+    min_lower_staff_measure_coverage: float | None = None,
 ) -> List[Dict[str, Any]]:
     path = dataset_dir / f"{split}.jsonl"
     if not path.exists():
@@ -308,6 +317,8 @@ def _selected_rows(
         raise ValueError("max_example_characters must be positive when provided")
     if min_variation_score is not None and not 0 <= min_variation_score <= 1:
         raise ValueError("min_variation_score must be between 0 and 1")
+    if min_lower_staff_measure_coverage is not None and not 0 <= min_lower_staff_measure_coverage <= 1:
+        raise ValueError("min_lower_staff_measure_coverage must be between 0 and 1")
     selected = set(tasks)
     rows = [
         row
@@ -317,6 +328,11 @@ def _selected_rows(
         and (
             min_variation_score is None
             or row.get("notation_profile", {}).get("variation_score", 0.0) >= min_variation_score
+        )
+        and (
+            min_lower_staff_measure_coverage is None
+            or row.get("notation_profile", {}).get("lower_staff_measure_coverage", 0.0)
+            >= min_lower_staff_measure_coverage
         )
     ]
     return rows[:max_examples] if max_examples is not None else rows
@@ -532,6 +548,11 @@ def _launch_command(config: TrainConfig) -> str:
         else ""
     )
     min_variation = f" --min-variation-score {config.min_variation_score}" if config.min_variation_score is not None else ""
+    min_lower_staff_coverage = (
+        f" --min-lower-staff-measure-coverage {config.min_lower_staff_measure_coverage}"
+        if config.min_lower_staff_measure_coverage is not None
+        else ""
+    )
     max_steps = f" --max-steps {config.max_steps}" if config.max_steps >= 0 else ""
     return (
         "python -m midi_llm.train_scoredsl"
@@ -550,6 +571,7 @@ def _launch_command(config: TrainConfig) -> str:
         f"{max_examples}"
         f"{max_characters}"
         f"{min_variation}"
+        f"{min_lower_staff_coverage}"
         f"{max_steps}"
     )
 
@@ -573,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-examples", type=int, help="Select at most this many examples after task filtering")
     parser.add_argument("--max-example-characters", type=int, help="Exclude larger examples without truncating targets")
     parser.add_argument("--min-variation-score", type=float, help="Select source scores above this notation variation score")
+    parser.add_argument(
+        "--min-lower-staff-measure-coverage",
+        type=float,
+        help="Select source scores with accompaniment notation across enough planned measures",
+    )
     parser.add_argument("--max-seq-length", type=int, default=81920)
     parser.add_argument("--loss-chunk-tokens", type=int, default=256)
     parser.add_argument("--structural-token-weight", type=float, default=8.0)
@@ -599,6 +626,7 @@ def main() -> None:
         max_examples=args.max_examples,
         max_example_characters=args.max_example_characters,
         min_variation_score=args.min_variation_score,
+        min_lower_staff_measure_coverage=args.min_lower_staff_measure_coverage,
         max_seq_length=args.max_seq_length,
         loss_chunk_tokens=args.loss_chunk_tokens,
         structural_token_weight=args.structural_token_weight,

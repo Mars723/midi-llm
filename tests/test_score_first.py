@@ -30,6 +30,7 @@ from midi_llm.generate_checkpoint import (
     _measure_event_budget_exceeded,
     _resume_hierarchical_score,
     _rewrite_final_tonic_cadence,
+    _sanitize_model_directions,
     _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
@@ -104,6 +105,7 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(model_input["target_range"], [1, score.plan.measure_count])
         self.assertEqual(model_input["future_ending_target"]["measure"], score.plan.measure_count)
         self.assertEqual(model_input["notation_constraints"]["maximum_identical_measure_run"], 8)
+        self.assertEqual(model_input["notation_constraints"]["minimum_lower_staff_measure_coverage"], 0.75)
         decoded = _score_from_continuation(
             encode_model_score(score) + "ignored trailing output",
             score.plan,
@@ -256,6 +258,25 @@ class ScoreFirstTest(unittest.TestCase):
         )
         self.assertTrue(_ending_fragment_has_tonic(score))
         self.assertEqual(score.metadata["cadence_repair"]["measure"], final_measure)
+
+    def test_evaluator_rejects_missing_accompaniment_staff(self):
+        score, performance = self.build_score()
+        score.notes = [note for note in score.notes if note.staff == 1]
+        metrics = evaluate_score(score, performance)
+        self.assertEqual(metrics["lower_staff_measure_coverage"], 0.0)
+        self.assertFalse(metrics["two_staff_texture_acceptable"])
+        self.assertFalse(metrics["valid"])
+
+    def test_model_direction_sanitizer_drops_conflicting_tempo_words(self):
+        score, _ = self.build_score()
+        score.directions = [
+            ScoreDirection(measure=1, beat=0.0, kind="words", value="Allegro"),
+            ScoreDirection(measure=1, beat=0.0, kind="words", value="dolce"),
+            ScoreDirection(measure=1, beat=0.0, kind="tempo", value="120|Allegro"),
+            ScoreDirection(measure=1, beat=0.0, kind="dynamic", value="p"),
+        ]
+        self.assertEqual(_sanitize_model_directions(score), 2)
+        self.assertEqual([(direction.kind, direction.value) for direction in score.directions], [("words", "dolce"), ("dynamic", "p")])
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:
@@ -735,6 +756,7 @@ class ScoreFirstTest(unittest.TestCase):
             )
             profile = analyze_notation(score)
             self.assertEqual(profile["texture"], score.plan.texture)
+            self.assertGreater(profile["lower_staff_measure_coverage"], 0)
             self.assertIn(profile["variation_tier"], {"low", "moderate", "high"})
             self.assertEqual(score.layout_hints[0].measure, 2)
             self.assertEqual(validate_score(score), [])
@@ -991,11 +1013,14 @@ class ScoreFirstTest(unittest.TestCase):
                 {
                     "example_id": f"example-{variation}",
                     "task": "section-variation-revise",
-                    "notation_profile": {"variation_score": variation},
+                    "notation_profile": {
+                        "variation_score": variation,
+                        "lower_staff_measure_coverage": lower_staff_coverage,
+                    },
                     "model_input": {"instruction": "Revise contrast."},
                     "target_scoredsl": "END_SCORE\n",
                 }
-                for variation in (0.4, 0.7)
+                for variation, lower_staff_coverage in ((0.4, 0.9), (0.7, 0.4), (0.8, 0.9))
             ]
             (dataset / "train.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in rows),
@@ -1006,10 +1031,12 @@ class ScoreFirstTest(unittest.TestCase):
                     dataset_dir=str(dataset),
                     output_dir=str(root / "run"),
                     min_variation_score=0.55,
+                    min_lower_staff_measure_coverage=0.75,
                 )
             )
             self.assertEqual(spec["dataset"]["selected_examples"], 1)
             self.assertIn("--min-variation-score 0.55", spec["launch_command"])
+            self.assertIn("--min-lower-staff-measure-coverage 0.75", spec["launch_command"])
 
     def test_training_loss_weights_score_structure_and_target_prefix(self):
         class CharacterTokenizer:

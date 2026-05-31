@@ -123,6 +123,17 @@ balance_refinement() {
     --learning-rate "${MIDI_LLM_BALANCE_REFINEMENT_LEARNING_RATE:-0.00005}"
 }
 
+two_staff_refinement() {
+  run_stage \
+    09_two_staff_refinement \
+    score-dsl-autoencode,section-expand-16-64,masked-span-inpaint,recapitulation-revise,ending-complete,whole-piece-generate,section-variation-revise \
+    "${MIDI_LLM_TWO_STAFF_REFINEMENT_EPOCHS:-1}" \
+    "$RUN_ROOT/08_balance_refinement/adapter" \
+    --min-variation-score "${MIDI_LLM_MIN_VARIATION_SCORE:-0.55}" \
+    --min-lower-staff-measure-coverage "${MIDI_LLM_MIN_LOWER_STAFF_MEASURE_COVERAGE:-0.75}" \
+    --learning-rate "${MIDI_LLM_TWO_STAFF_REFINEMENT_LEARNING_RATE:-0.00005}"
+}
+
 case "${1:-pilot}" in
   smoke)
     smoke
@@ -148,9 +159,13 @@ case "${1:-pilot}" in
     diversity_structure
     diversity_whole_piece
     balance_refinement
+    two_staff_refinement
     ;;
   balance-refinement)
     balance_refinement
+    ;;
+  two-staff-refinement)
+    two_staff_refinement
     ;;
   all)
     smoke
@@ -162,9 +177,10 @@ case "${1:-pilot}" in
     diversity_structure
     diversity_whole_piece
     balance_refinement
+    two_staff_refinement
     ;;
   *)
-    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|balance-refinement|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|balance-refinement|two-staff-refinement|all}" >&2
     exit 2
     ;;
 esac

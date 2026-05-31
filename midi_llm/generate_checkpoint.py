@@ -15,7 +15,11 @@ from .compiler import render_musescore, write_musicxml, write_performance_midi, 
 from .evaluate import _measure_repetition_metrics, _tonic_pitch_class, evaluate_score
 from .gallery import write_gallery
 from .model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
-from .notation_analysis import intermediate_notation_constraints
+from .notation_analysis import (
+    intermediate_notation_constraints,
+    requires_two_staff_texture,
+    staff_measure_coverage,
+)
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
 from .scoredsl import encode_score
@@ -130,6 +134,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
                     f"Candidate {index + 1}",
                 )
                 score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
+            score.metadata["sanitized_model_directions"] = _sanitize_model_directions(score)
             performance = render_performance(score, seed=seed + 10_000)
             metrics = evaluate_score(score, performance)
             if not metrics["valid"]:
@@ -549,6 +554,9 @@ def _score_fragment_from_continuation(
         errors.append("Generated fragment exceeds the per-measure notation event budget")
     if allow_terminal_empty and require_terminal_tonic and not _ending_fragment_has_tonic(score):
         errors.append("Generated ending fragment does not end on the planned tonic")
+    staff_coverage = staff_measure_coverage(score.notes, max(1, len(realized_measures)))
+    if requires_two_staff_texture(score.plan.texture) and min(staff_coverage.values()) < 0.40:
+        errors.append("Generated fragment does not realize the requested two-staff piano texture")
     repetition = _measure_repetition_metrics(score)
     realized_measure_count = len(realized_measures)
     if realized_measure_count >= 16 and repetition["unique_measure_signature_ratio"] < 0.25:
@@ -601,6 +609,40 @@ def _rewrite_final_tonic_cadence(score: PianoScoreIR) -> None:
         "kind": "terminal-tonic-chord-rewrite",
         "measure": final_measure,
     }
+
+
+def _sanitize_model_directions(score: PianoScoreIR) -> int:
+    """Drop contradictory or noisy optional model directions before engraving."""
+
+    style_words = {
+        "a tempo",
+        "cantabile",
+        "calando",
+        "dolce",
+        "espressivo",
+        "legato",
+        "marc.",
+        "rall.",
+        "rit.",
+        "sostenuto",
+    }
+    dynamics = {"ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "sfz", "fz"}
+    sanitized = []
+    removed = 0
+    for direction in score.directions:
+        keep = True
+        if direction.kind in ("tempo", "tempo-text"):
+            keep = False
+        elif direction.kind == "words":
+            keep = direction.value.strip().lower() in style_words
+        elif direction.kind == "dynamic":
+            keep = direction.value in dynamics
+        if keep:
+            sanitized.append(direction)
+        else:
+            removed += 1
+    score.directions = sanitized
+    return removed
 
 
 def _score_from_continuation(

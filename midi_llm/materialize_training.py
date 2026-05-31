@@ -139,6 +139,11 @@ def materialize_training_dataset(
         "score_texture_counts": dict(sorted(texture_counts.items())),
         "score_variation_tier_counts": dict(sorted(variation_tier_counts.items())),
         "score_marking_counts": dict(sorted(marking_counts.items())),
+        "score_staff_coverage_counts": {
+            "lower_staff_gte_0_50": sum(profile["lower_staff_measure_coverage"] >= 0.50 for profile in profiles.values()),
+            "lower_staff_gte_0_75": sum(profile["lower_staff_measure_coverage"] >= 0.75 for profile in profiles.values()),
+            "upper_staff_gte_0_75": sum(profile["upper_staff_measure_coverage"] >= 0.75 for profile in profiles.values()),
+        },
         "invariants": {
             "targets_are_compact_model_scoredsl": True,
             "rich_score_dsl_is_preserved_as_authoritative_artifact": True,

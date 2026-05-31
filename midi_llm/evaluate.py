@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import xml.etree.ElementTree as ET
 
+from .notation_analysis import requires_two_staff_texture, staff_measure_coverage
 from .score_ir import PianoPerformanceIR, PianoScoreIR, read_performance, read_score, validate_score
 
 
@@ -53,6 +54,11 @@ def evaluate_score(
         repetition["unique_measure_signature_ratio"] >= 0.30
         and repetition["longest_identical_measure_run"] <= 8
     )
+    staff_coverage = staff_measure_coverage(score.notes, score.plan.measure_count)
+    two_staff_texture_acceptable = (
+        not requires_two_staff_texture(score.plan.texture)
+        or min(staff_coverage.values()) >= 0.70
+    )
     structural_score = 100.0
     structural_score -= len(errors) * 20
     structural_score -= len(missing_refs) * 10
@@ -60,6 +66,7 @@ def evaluate_score(
     structural_score -= 15 if not tempo_overlay_isolated else 0
     structural_score -= min(15, duration_error * 100)
     structural_score -= repetition_penalty
+    structural_score -= 20 if not two_staff_texture_acceptable else 0
     return {
         "valid": (
             not errors
@@ -68,6 +75,7 @@ def evaluate_score(
             and tempo_overlay_isolated
             and periodic_loop_acceptable
             and measure_diversity_acceptable
+            and two_staff_texture_acceptable
         ),
         "validation_errors": errors,
         "measure_count": score.plan.measure_count,
@@ -84,6 +92,9 @@ def evaluate_score(
         "tempo_overlay_isolated": tempo_overlay_isolated,
         "periodic_loop_acceptable": periodic_loop_acceptable,
         "measure_diversity_acceptable": measure_diversity_acceptable,
+        "upper_staff_measure_coverage": staff_coverage[1],
+        "lower_staff_measure_coverage": staff_coverage[2],
+        "two_staff_texture_acceptable": two_staff_texture_acceptable,
         **repetition,
         "repetition_score_penalty": repetition_penalty,
         "structural_score": round(max(0.0, structural_score), 2),

@@ -80,6 +80,7 @@ def write_gallery(score: PianoScoreIR, manifest: Dict[str, Any], output_dir: Pat
         <span class="pill">{score.plan.meter.beats}/{score.plan.meter.beat_type}</span>
         <span class="pill">structural score {metrics.get("structural_score", "n/a")}</span>
         <span class="pill">unique-measure ratio {metrics.get("unique_measure_signature_ratio", "n/a")}</span>
+        <span class="pill">lower-staff coverage {metrics.get("lower_staff_measure_coverage", "n/a")}</span>
         <span class="pill">max repeated-measure run {metrics.get("longest_identical_measure_run", "n/a")}</span>
         <span class="pill">periodic loop span {metrics.get("periodic_measure_loop_span", "n/a")}</span>
       </div>
