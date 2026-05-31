@@ -334,7 +334,9 @@ def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
         current_measure_run = current_measure_run + 1 if signature == prior_signature else 1
         prior_signature = signature
         max_measure_run = max(max_measure_run, current_measure_run)
-    if len(notes_by_measure) >= 16 and max_measure_run / len(notes_by_measure) > 0.65:
+    if len(notes_by_measure) >= 16 and (
+        max_measure_run > 24 or max_measure_run / len(notes_by_measure) > 0.65
+    ):
         errors.append("Generated score repeats identical measure content across most of the piece")
     return errors
 
