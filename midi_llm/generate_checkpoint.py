@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
 from .evaluate import _measure_repetition_metrics, evaluate_score
 from .gallery import write_gallery
-from .model_scoredsl import decode_model_score, model_score_generation_prefix
+from .model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from .notation_analysis import intermediate_notation_constraints
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
@@ -78,8 +78,6 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     """Sample valid complete-piece ScoreDSL candidates and render the best score."""
 
     plan, motif_bank, controls = _requested_plan(args)
-    generation_prefix = model_score_generation_prefix()
-    prompt = model_prompt(_whole_piece_model_input(plan, motif_bank)) + generation_prefix
     tokenizer, model, torch = _load_checkpoint(args.base_model, args.adapter_dir)
     output_dir = Path(args.output_dir or _default_output_dir())
     candidate_dir = output_dir / "candidates"
@@ -89,33 +87,34 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     for index in range(args.candidates):
         seed = args.seed + index
         print(f"Sampling checkpoint candidate {index + 1}/{args.candidates} with seed={seed}", flush=True)
-        torch.manual_seed(seed)
-        encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
-        encoded = {key: value.to(model.device) for key, value in encoded.items()}
-        raw_path = candidate_dir / f"candidate_{index + 1}.raw.dsl"
-        streamer = _CandidateFileStreamer(tokenizer, raw_path)
-        output = model.generate(
-            **encoded,
-            do_sample=True,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            repetition_penalty=args.repetition_penalty,
-            max_new_tokens=args.max_new_tokens,
-            stop_strings=["END_SCORE"],
-            stopping_criteria=[
-                _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], plan.measure_count)
-            ],
-            tokenizer=tokenizer,
-            streamer=streamer,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-        generated_tokens = output[0][encoded["input_ids"].shape[1] :]
-        continuation = generation_prefix + tokenizer.decode(generated_tokens, skip_special_tokens=False)
-        print(f"Candidate {index + 1} sampled {generated_tokens.shape[0]} tokens", flush=True)
-        raw_path.write_text(continuation, encoding="utf-8")
         try:
-            score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
+            if args.strategy == "hierarchical":
+                score = _sample_hierarchical_score(
+                    plan,
+                    motif_bank,
+                    args.adapter_dir,
+                    tokenizer,
+                    model,
+                    torch,
+                    args,
+                    candidate_dir,
+                    index + 1,
+                    seed,
+                )
+            else:
+                continuation = _sample_model_continuation(
+                    _whole_piece_model_input(plan, motif_bank),
+                    1,
+                    plan.measure_count,
+                    tokenizer,
+                    model,
+                    torch,
+                    args,
+                    candidate_dir / f"candidate_{index + 1}.raw.dsl",
+                    seed,
+                    f"Candidate {index + 1}",
+                )
+                score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
             performance = render_performance(score, seed=seed + 10_000)
             metrics = evaluate_score(score, performance)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
@@ -153,6 +152,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         "selected_candidate": best_index + 1,
         "valid_candidate_count": len(candidates),
         "attempted_candidate_count": args.candidates,
+        "generation_strategy": args.strategy,
         "candidate_failures": failures,
         "decode_completion": score.metadata.get("decode_completion"),
         "skipped_malformed_optional_rows": score.metadata.get("skipped_malformed_optional_rows", 0),
@@ -226,6 +226,202 @@ def _whole_piece_model_input(plan: PiecePlanIR, motif_bank: MotifBank) -> Dict[s
         "notation_constraints": intermediate_notation_constraints(plan),
         "bidirectional": False,
     }
+
+
+def _sample_model_continuation(
+    model_input: Dict[str, Any],
+    start_measure: int,
+    final_measure: int,
+    tokenizer,
+    model,
+    torch,
+    args: argparse.Namespace,
+    raw_path: Path,
+    seed: int,
+    label: str,
+) -> str:
+    generation_prefix = model_score_generation_prefix(start_measure)
+    prompt = model_prompt(model_input) + generation_prefix
+    torch.manual_seed(seed)
+    encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+    encoded = {key: value.to(model.device) for key, value in encoded.items()}
+    streamer = _CandidateFileStreamer(tokenizer, raw_path)
+    output = model.generate(
+        **encoded,
+        do_sample=True,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
+        max_new_tokens=args.max_new_tokens,
+        stop_strings=["END_SCORE"],
+        stopping_criteria=[
+            _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], final_measure)
+        ],
+        tokenizer=tokenizer,
+        streamer=streamer,
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+    )
+    generated_tokens = output[0][encoded["input_ids"].shape[1] :]
+    continuation = generation_prefix + tokenizer.decode(generated_tokens, skip_special_tokens=False)
+    print(f"{label} sampled {generated_tokens.shape[0]} tokens", flush=True)
+    raw_path.write_text(continuation, encoding="utf-8")
+    return continuation
+
+
+def _sample_hierarchical_score(
+    plan: PiecePlanIR,
+    motif_bank: MotifBank,
+    adapter_dir: str,
+    tokenizer,
+    model,
+    torch,
+    args: argparse.Namespace,
+    candidate_dir: Path,
+    candidate_number: int,
+    seed: int,
+) -> PianoScoreIR:
+    notes = []
+    directions = []
+    layout_hints = []
+    section_completions = []
+    skipped_optional_rows = 0
+    for section_index, section in enumerate(plan.sections, start=1):
+        partial = PianoScoreIR(
+            plan=plan,
+            motif_bank=motif_bank,
+            notes=notes,
+            directions=directions,
+            layout_hints=layout_hints,
+        )
+        continuation = _sample_model_continuation(
+            _section_model_input(plan, motif_bank, section, partial),
+            section.start_measure,
+            section.end_measure,
+            tokenizer,
+            model,
+            torch,
+            args,
+            candidate_dir / f"candidate_{candidate_number}.section_{section_index}.raw.dsl",
+            seed + section_index - 1,
+            f"Candidate {candidate_number} section {section.label}",
+        )
+        fragment = _score_fragment_from_continuation(
+            continuation,
+            plan,
+            motif_bank,
+            adapter_dir,
+            [section.start_measure, section.end_measure],
+            allow_terminal_empty=section_index == len(plan.sections),
+        )
+        for note in fragment.notes:
+            note.id = f"model-note-{len(notes) + 1}"
+            notes.append(note)
+        directions.extend(fragment.directions)
+        layout_hints.extend(fragment.layout_hints)
+        section_completions.append(fragment.metadata["decode_completion"])
+        skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
+    score = PianoScoreIR(
+        plan=deepcopy(plan),
+        motif_bank=motif_bank,
+        notes=notes,
+        directions=directions,
+        layout_hints=layout_hints,
+        metadata={
+            "score_source": "trained-scoredsl-adapter",
+            "adapter_dir": adapter_dir,
+            "decode_completion": "hierarchical-sections",
+            "section_decode_completions": section_completions,
+            "skipped_malformed_optional_rows": skipped_optional_rows,
+            "generation_strategy": "hierarchical",
+        },
+    )
+    score.metadata["trimmed_empty_trailing_measures"] = _trim_single_empty_trailing_measure(score)
+    errors = validate_score(score)
+    errors.extend(_validate_generated_whole_piece(score))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return score
+
+
+def _section_model_input(plan, motif_bank, section, partial_score: PianoScoreIR) -> Dict[str, Any]:
+    model_input = _whole_piece_model_input(plan, motif_bank)
+    model_input.update(
+        {
+            "instruction": "Expand the target section while respecting the full plan, motifs, neighbors, and ending target.",
+            "target_range": [section.start_measure, section.end_measure],
+            "left_neighbor_scoredsl": _left_neighbor_scoredsl(partial_score, section.start_measure),
+            "right_neighbor_scoredsl": None,
+            "active_section": {
+                "label": section.label,
+                "role": section.role,
+                "range": [section.start_measure, section.end_measure],
+                "motif_refs": section.motif_refs,
+                "cadence": section.cadence,
+            },
+        }
+    )
+    return model_input
+
+
+def _left_neighbor_scoredsl(score: PianoScoreIR, start_measure: int) -> str | None:
+    if start_measure <= 1:
+        return None
+    left_start = max(1, start_measure - 8)
+    left_end = start_measure - 1
+    return encode_model_score(
+        PianoScoreIR(
+            plan=score.plan,
+            motif_bank=score.motif_bank,
+            notes=[note for note in score.notes if left_start <= note.measure <= left_end],
+            directions=[direction for direction in score.directions if left_start <= direction.measure <= left_end],
+            layout_hints=[hint for hint in score.layout_hints if left_start <= hint.measure <= left_end],
+            metadata={"fragment": {"range": [left_start, left_end]}},
+        )
+    )
+
+
+def _score_fragment_from_continuation(
+    continuation: str,
+    plan: PiecePlanIR,
+    motif_bank: MotifBank,
+    adapter_dir: str,
+    target_range: List[int],
+    *,
+    allow_terminal_empty: bool,
+) -> PianoScoreIR:
+    start_measure, end_measure = target_range
+    finalized, decode_completion, skipped_optional_rows = _finalize_model_continuation(continuation, end_measure)
+    score = decode_model_score(
+        finalized,
+        deepcopy(plan),
+        motif_bank,
+        metadata={
+            "score_source": "trained-scoredsl-adapter-fragment",
+            "adapter_dir": adapter_dir,
+            "decode_completion": decode_completion,
+            "skipped_malformed_optional_rows": skipped_optional_rows,
+            "target_range": target_range,
+        },
+    )
+    realized_measures = {note.measure for note in score.notes}
+    errors = []
+    if start_measure not in realized_measures:
+        errors.append(f"Generated fragment does not realize opening measure {start_measure}")
+    if end_measure not in realized_measures and not (allow_terminal_empty and end_measure - 1 in realized_measures):
+        errors.append(f"Generated fragment does not realize final measure {end_measure}")
+    if any(measure < start_measure or measure > end_measure for measure in realized_measures):
+        errors.append(f"Generated fragment escapes target range {start_measure}-{end_measure}")
+    repetition = _measure_repetition_metrics(score)
+    if (
+        repetition["periodic_measure_loop_period"] is not None
+        and repetition["periodic_measure_loop_span"] >= 16
+        and repetition["periodic_measure_loop_ratio"] > 0.75
+    ):
+        errors.append("Generated fragment repeats a short measure pattern across most of the section")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return score
 
 
 def _score_from_continuation(
@@ -434,6 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--repetition-penalty", type=float, default=1.01)
+    parser.add_argument("--strategy", choices=("hierarchical", "single-pass"), default="hierarchical")
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")

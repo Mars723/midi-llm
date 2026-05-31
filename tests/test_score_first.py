@@ -26,6 +26,7 @@ from midi_llm.fetch_pdmx import (
 from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
+    _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
     build_parser as build_checkpoint_parser,
@@ -183,6 +184,18 @@ class ScoreFirstTest(unittest.TestCase):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.repetition_penalty, 1.01)
+        self.assertEqual(args.strategy, "hierarchical")
+
+    def test_section_model_input_carries_global_plan_and_left_neighbor(self):
+        score, _ = self.build_score()
+        first, second = score.plan.sections[:2]
+        first_input = _section_model_input(score.plan, score.motif_bank, first, score)
+        second_input = _section_model_input(score.plan, score.motif_bank, second, score)
+        self.assertEqual(first_input["target_range"], [first.start_measure, first.end_measure])
+        self.assertIsNone(first_input["left_neighbor_scoredsl"])
+        self.assertEqual(second_input["piece_plan"]["measure_count"], score.plan.measure_count)
+        self.assertIn("MEASURE", second_input["left_neighbor_scoredsl"])
+        self.assertEqual(second_input["active_section"]["label"], second.label)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:
@@ -239,6 +252,16 @@ class ScoreFirstTest(unittest.TestCase):
             min(15, max(0, metrics["longest_identical_measure_run"] - 8)),
         )
         self.assertIn("periodic_measure_loop_span", metrics)
+
+    def test_evaluation_invalidates_short_periodic_measure_loop(self):
+        score, _ = self.build_score()
+        score.notes = [
+            NoteEvent(id=f"loop-{measure}", measure=measure, beat=0.0, duration=1.0, pitch=60 + measure % 2, staff=1)
+            for measure in range(1, score.plan.measure_count + 1)
+        ]
+        metrics = evaluate_score(score, render_performance(score, seed=24))
+        self.assertFalse(metrics["periodic_loop_acceptable"])
+        self.assertFalse(metrics["valid"])
 
     def test_musicxml_compiler_restores_blueprint_tempos_without_model_directions(self):
         score, performance = self.build_score()

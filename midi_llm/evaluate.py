@@ -45,6 +45,10 @@ def evaluate_score(
         + min(15, max(0, round((0.35 - repetition["unique_measure_signature_ratio"]) * 50)))
         + min(15, max(0, round((repetition["periodic_measure_loop_ratio"] - 0.50) * 30))),
     )
+    periodic_loop_acceptable = (
+        repetition["periodic_measure_loop_span"] < 16
+        or repetition["periodic_measure_loop_ratio"] <= 0.65
+    )
     structural_score = 100.0
     structural_score -= len(errors) * 20
     structural_score -= len(missing_refs) * 10
@@ -53,7 +57,7 @@ def evaluate_score(
     structural_score -= min(15, duration_error * 100)
     structural_score -= repetition_penalty
     return {
-        "valid": not errors and has_final_tonic and not missing_refs and tempo_overlay_isolated,
+        "valid": not errors and has_final_tonic and not missing_refs and tempo_overlay_isolated and periodic_loop_acceptable,
         "validation_errors": errors,
         "measure_count": score.plan.measure_count,
         "estimated_duration_minutes": round(duration_minutes, 3),
@@ -67,6 +71,7 @@ def evaluate_score(
         "performance_tempo_curve_points": len(performance.tempo_curve),
         "musicxml_tempo_marks": xml_tempo_count,
         "tempo_overlay_isolated": tempo_overlay_isolated,
+        "periodic_loop_acceptable": periodic_loop_acceptable,
         **repetition,
         "repetition_score_penalty": repetition_penalty,
         "structural_score": round(max(0.0, structural_score), 2),

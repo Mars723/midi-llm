@@ -286,11 +286,13 @@ python -m midi_llm.generate_checkpoint \
   --output-dir generated_score_first/checkpoint_sample_001
 ```
 
-This path samples compact model-facing ScoreDSL notes from the adapter, rejects
-malformed, truncated, and locally collapsed candidates, keeps the requested
-whole-piece plan authoritative, and renders the selected complete score to the
-same Gallery artifacts as the local baseline. The performance overlay still
-uses the v1 rules renderer. The pilot defaults to `temperature=0.8` and a light
+This path defaults to hierarchical sampling: each planned section reads the
+same whole-piece blueprint and motif bank plus the generated left neighbor,
+then the compiler merges sections into one complete score. Use
+`--strategy single-pass` only as a research comparison. Both paths reject
+malformed, truncated, continuously repeated, and short-period looped
+candidates before rendering. The performance overlay still uses the v1 rules
+renderer. The pilot defaults to `temperature=0.8` and a light
 `repetition_penalty=1.01`; the sample helper exposes both through environment
 variables for checkpoint comparisons.
 
