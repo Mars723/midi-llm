@@ -472,8 +472,11 @@ def _fragment_quality_score(score: PianoScoreIR) -> float:
     repetition = _measure_repetition_metrics(score)
     measure_count = max(1, len({note.measure for note in score.notes}))
     notes_per_measure = len(score.notes) / measure_count
+    staff_coverage = staff_measure_coverage(score.notes, measure_count)
+    two_staff_bonus = min(staff_coverage.values()) * 35 if requires_two_staff_texture(score.plan.texture) else 0
     return round(
         repetition["unique_measure_signature_ratio"] * 100
+        + two_staff_bonus
         - max(0, repetition["longest_identical_measure_run"] - 1) * 2
         - abs(notes_per_measure - 14),
         3,
@@ -591,7 +594,20 @@ def _rewrite_final_tonic_cadence(score: PianoScoreIR) -> None:
     final_measure = max(note.measure for note in score.notes)
     score.notes = [note for note in score.notes if note.measure != final_measure]
     duration = score.plan.meter.quarter_beats
-    for pitch, staff in ((48, 2), (55, 2), (60, 2), (72, 1), (76, 1), (79, 1), (84, 1)):
+    tonic = _tonic_pitch_class(score.plan.key)
+    third = 3 if "minor" in score.plan.key.lower() else 4
+    lower_root = 48 + tonic
+    upper_root = 72 + tonic
+    chord = (
+        (lower_root, 2),
+        (lower_root + 7, 2),
+        (lower_root + 12, 2),
+        (upper_root, 1),
+        (upper_root + third, 1),
+        (upper_root + 7, 1),
+        (upper_root + 12, 1),
+    )
+    for pitch, staff in chord:
         score.notes.append(
             NoteEvent(
                 id=f"cadence-repair-note-{len(score.notes) + 1}",

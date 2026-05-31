@@ -27,6 +27,7 @@ from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
     _ending_fragment_has_tonic,
+    _fragment_quality_score,
     _measure_event_budget_exceeded,
     _resume_hierarchical_score,
     _rewrite_final_tonic_cadence,
@@ -249,6 +250,7 @@ class ScoreFirstTest(unittest.TestCase):
 
     def test_cadence_repair_rewrites_only_final_measure(self):
         score, _ = self.build_score()
+        score.plan.key = "D minor"
         final_measure = max(note.measure for note in score.notes)
         earlier_notes = [note for note in score.notes if note.measure != final_measure]
         _rewrite_final_tonic_cadence(score)
@@ -257,7 +259,19 @@ class ScoreFirstTest(unittest.TestCase):
             earlier_notes,
         )
         self.assertTrue(_ending_fragment_has_tonic(score))
+        final_pitch_classes = {note.pitch % 12 for note in score.notes if note.measure == final_measure}
+        self.assertEqual(final_pitch_classes, {2, 5, 9})
         self.assertEqual(score.metadata["cadence_repair"]["measure"], final_measure)
+
+    def test_fragment_quality_rewards_requested_two_staff_texture(self):
+        score, _ = self.build_score()
+        one_staff = PianoScoreIR(
+            plan=score.plan,
+            motif_bank=score.motif_bank,
+            notes=[note for note in score.notes if note.staff == 1],
+            directions=[],
+        )
+        self.assertGreater(_fragment_quality_score(score), _fragment_quality_score(one_staff))
 
     def test_evaluator_rejects_missing_accompaniment_staff(self):
         score, performance = self.build_score()
