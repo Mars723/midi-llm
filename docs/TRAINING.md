@@ -123,8 +123,13 @@ that a ScoreDSL adapter has already been trained.
 Install the optional trainer packages on an NVIDIA host:
 
 ```bash
+pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0
 pip install -r requirements-score-first-train.txt
 ```
+
+The checked-in bootstrap script performs both commands. Pinning the PyTorch
+CUDA `12.8` wheel avoids accidentally installing a CUDA runtime newer than the
+driver exposed by a rented host.
 
 Inspect the generated launch specification locally or on the cloud host:
 

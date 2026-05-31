@@ -18,6 +18,9 @@ nvidia-smi
 python3 -m venv "$VENV"
 source "$VENV/bin/activate"
 python -m pip install --upgrade pip
+python -m pip install \
+  --index-url "${MIDI_LLM_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}" \
+  "${MIDI_LLM_TORCH_PACKAGE:-torch==2.8.0}"
 python -m pip install -r requirements-score-first-train.txt
 
 rm -rf "$DATA_ROOT/model_dataset"
