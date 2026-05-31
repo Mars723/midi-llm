@@ -140,6 +140,8 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     if not args.skip_musescore:
         render = render_musescore(output_dir / "score.musicxml", output_dir, args.musescore_bin)
     metrics = evaluate_score(score, performance, output_dir / "score.musicxml")
+    if not metrics["valid"]:
+        raise RuntimeError(f"Rendered checkpoint score failed validation: {json.dumps(metrics, sort_keys=True)}")
     manifest: Dict[str, Any] = {
         "pipeline": "score-first-checkpoint-whole-piece-v1",
         "score_source": "trained-scoredsl-adapter",

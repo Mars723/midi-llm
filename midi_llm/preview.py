@@ -8,19 +8,27 @@ import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .compiler import render_musescore
+from .compiler import render_musescore, write_musicxml
+from .evaluate import evaluate_score
 from .gallery import write_gallery
-from .score_ir import read_score
+from .score_ir import read_performance, read_score
 
 
 def rebuild_gallery(run_dir: Path | str, rerender: bool = False) -> Path:
     run_dir = Path(run_dir)
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    score = read_score(run_dir / "score.ir.json")
     if rerender:
+        write_musicxml(score, run_dir / "score.musicxml")
         manifest["render"] = render_musescore(run_dir / "score.musicxml", run_dir)
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return write_gallery(read_score(run_dir / "score.ir.json"), manifest, run_dir)
+    manifest["metrics"] = evaluate_score(
+        score,
+        read_performance(run_dir / "performance.ir.json"),
+        run_dir / "score.musicxml",
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return write_gallery(score, manifest, run_dir)
 
 
 def serve(run_dir: Path | str, port: int) -> None:

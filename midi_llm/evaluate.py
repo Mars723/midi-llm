@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -37,12 +38,15 @@ def evaluate_score(
         score.plan.measure_count * score.plan.meter.quarter_beats / score.plan.tempo_bpm
     )
     duration_error = abs(duration_minutes - score.plan.duration_minutes) / score.plan.duration_minutes
+    repetition = _measure_repetition_metrics(score)
+    repetition_penalty = min(15, max(0, repetition["longest_identical_measure_run"] - 8))
     structural_score = 100.0
     structural_score -= len(errors) * 20
     structural_score -= len(missing_refs) * 10
     structural_score -= 15 if not has_final_tonic else 0
     structural_score -= 15 if not tempo_overlay_isolated else 0
     structural_score -= min(15, duration_error * 100)
+    structural_score -= repetition_penalty
     return {
         "valid": not errors and has_final_tonic and not missing_refs and tempo_overlay_isolated,
         "validation_errors": errors,
@@ -58,7 +62,40 @@ def evaluate_score(
         "performance_tempo_curve_points": len(performance.tempo_curve),
         "musicxml_tempo_marks": xml_tempo_count,
         "tempo_overlay_isolated": tempo_overlay_isolated,
+        **repetition,
+        "repetition_score_penalty": repetition_penalty,
         "structural_score": round(max(0.0, structural_score), 2),
+    }
+
+
+def _measure_repetition_metrics(score: PianoScoreIR) -> Dict[str, Any]:
+    notes_by_measure = defaultdict(list)
+    for note in score.notes:
+        notes_by_measure[note.measure].append(
+            (
+                note.beat,
+                note.duration,
+                note.pitch,
+                note.staff,
+                note.voice,
+                note.articulation,
+                note.fingering,
+                note.tie_start,
+                note.tie_stop,
+            )
+        )
+    longest_run = 0
+    current_run = 0
+    prior_signature = None
+    for measure in sorted(notes_by_measure):
+        signature = tuple(notes_by_measure[measure])
+        current_run = current_run + 1 if signature == prior_signature else 1
+        prior_signature = signature
+        longest_run = max(longest_run, current_run)
+    return {
+        "unique_measure_signatures": len({tuple(notes) for notes in notes_by_measure.values()}),
+        "longest_identical_measure_run": longest_run,
+        "identical_measure_run_ratio": round(longest_run / len(notes_by_measure), 4) if notes_by_measure else 0.0,
     }
 
 

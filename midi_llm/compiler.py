@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import xml.etree.ElementTree as ET
 
@@ -107,6 +108,21 @@ def write_musicxml(score: PianoScoreIR, path: Path | str) -> Path:
         notes_by_measure[note.measure].append(note)
     for direction in score.directions:
         directions_by_measure[direction.measure].append(direction)
+    explicit_tempos = {
+        (direction.measure, _direction_tempo(direction))
+        for direction in score.directions
+        if direction.kind == "tempo"
+    }
+    for mark in score.plan.tempo_marks:
+        if (mark.measure, mark.bpm) not in explicit_tempos:
+            directions_by_measure[mark.measure].append(
+                ScoreDirection(
+                    measure=mark.measure,
+                    beat=0.0,
+                    kind="tempo",
+                    value=f"{mark.bpm}|{mark.text}",
+                )
+            )
 
     for measure_number in range(1, score.plan.measure_count + 1):
         measure = ET.SubElement(part, "measure", number=str(measure_number))
@@ -119,8 +135,7 @@ def write_musicxml(score: PianoScoreIR, path: Path | str) -> Path:
         measure_ticks = _ticks(score.plan.meter.quarter_beats)
         for staff in (1, 2):
             if staff == 2:
-                backup = ET.SubElement(measure, "backup")
-                ET.SubElement(backup, "duration").text = str(measure_ticks)
+                _append_backup(measure, measure_ticks)
             _append_staff_notes(
                 measure=measure,
                 notes=[note for note in notes_by_measure[measure_number] if note.staff == staff],
@@ -246,10 +261,44 @@ def _append_direction(measure: ET.Element, direction: ScoreDirection) -> None:
     ET.SubElement(element, "staff").text = str(direction.staff)
 
 
+def _direction_tempo(direction: ScoreDirection) -> int | float | None:
+    raw_bpm, _, _text = direction.value.partition("|")
+    try:
+        bpm = float(raw_bpm)
+    except ValueError:
+        return None
+    return round(bpm) if bpm.is_integer() else bpm
+
+
 def _append_staff_notes(
     measure: ET.Element,
     notes: Sequence[NoteEvent],
     staff: int,
+    measure_ticks: int,
+    prefer_flats: bool,
+) -> None:
+    voices = sorted({note.voice for note in notes})
+    if not voices:
+        _append_rest(measure, measure_ticks, staff)
+        return
+    for index, voice in enumerate(voices):
+        if index:
+            _append_backup(measure, measure_ticks)
+        _append_voice_notes(
+            measure,
+            [note for note in notes if note.voice == voice],
+            staff,
+            voice,
+            measure_ticks,
+            prefer_flats,
+        )
+
+
+def _append_voice_notes(
+    measure: ET.Element,
+    notes: Sequence[NoteEvent],
+    staff: int,
+    voice: int,
     measure_ticks: int,
     prefer_flats: bool,
 ) -> None:
@@ -259,7 +308,7 @@ def _append_staff_notes(
     cursor = 0
     for onset in sorted(groups):
         if onset > cursor:
-            _append_rest(measure, onset - cursor, staff)
+            _append_rest(measure, onset - cursor, staff, voice)
             cursor = onset
         group = groups[onset]
         duration_ticks = max(_ticks(note.duration) for note in group)
@@ -267,7 +316,7 @@ def _append_staff_notes(
             _append_note(measure, note, staff, chord=index > 0, prefer_flats=prefer_flats)
         cursor += duration_ticks
     if cursor < measure_ticks:
-        _append_rest(measure, measure_ticks - cursor, staff)
+        _append_rest(measure, measure_ticks - cursor, staff, voice)
 
 
 def _append_note(measure: ET.Element, note: NoteEvent, staff: int, chord: bool, prefer_flats: bool) -> None:
@@ -305,18 +354,23 @@ def _append_note(measure: ET.Element, note: NoteEvent, staff: int, chord: bool, 
             ET.SubElement(technical, "fingering").text = note.fingering
 
 
-def _append_rest(measure: ET.Element, duration_ticks: int, staff: int) -> None:
+def _append_rest(measure: ET.Element, duration_ticks: int, staff: int, voice: int = 1) -> None:
     if duration_ticks <= 0:
         return
     element = ET.SubElement(measure, "note")
     ET.SubElement(element, "rest")
     ET.SubElement(element, "duration").text = str(duration_ticks)
-    ET.SubElement(element, "voice").text = "1"
+    ET.SubElement(element, "voice").text = str(voice)
     note_type, dotted = _note_type(duration_ticks)
     ET.SubElement(element, "type").text = note_type
     if dotted:
         ET.SubElement(element, "dot")
     ET.SubElement(element, "staff").text = str(staff)
+
+
+def _append_backup(measure: ET.Element, duration_ticks: int) -> None:
+    backup = ET.SubElement(measure, "backup")
+    ET.SubElement(backup, "duration").text = str(duration_ticks)
 
 
 def _note_type(duration_ticks: int) -> Tuple[str, bool]:
@@ -390,18 +444,24 @@ def _ticks(beats: float) -> int:
 
 
 def _run_musescore(binary: str, source: Path, target: Path) -> None:
-    try:
-        subprocess.run(
-            [binary, "-F", "-o", str(target), str(source)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-        )
-    except subprocess.CalledProcessError:
-        # MuseScore 4.7.2 on macOS can abort after completing a CLI export.
-        if not _musescore_export_exists(target):
-            raise
+    _remove_musescore_export(target)
+    for attempt in range(4):
+        try:
+            subprocess.run(
+                [binary, "-F", "-o", str(target), str(source)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+            )
+            return
+        except subprocess.CalledProcessError:
+            # MuseScore 4.7.2 on macOS can abort before or after a CLI export.
+            if _musescore_export_exists(target):
+                return
+            if attempt == 3:
+                raise
+            time.sleep(1)
 
 
 def _musescore_export_exists(target: Path) -> bool:
@@ -410,3 +470,10 @@ def _musescore_export_exists(target: Path) -> bool:
     if target.suffix.lower() == ".png":
         return any(page.stat().st_size for page in target.parent.glob(f"{target.stem}-*.png"))
     return False
+
+
+def _remove_musescore_export(target: Path) -> None:
+    target.unlink(missing_ok=True)
+    if target.suffix.lower() == ".png":
+        for page in target.parent.glob(f"{target.stem}-*.png"):
+            page.unlink()

@@ -40,7 +40,7 @@ from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_ma
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
-from midi_llm.score_ir import read_score, validate_score
+from midi_llm.score_ir import NoteEvent, read_score, validate_score
 from midi_llm.training import create_run_plan
 from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
@@ -183,6 +183,41 @@ class ScoreFirstTest(unittest.TestCase):
             metrics = evaluate_score(score, performance, path)
             self.assertTrue(metrics["tempo_overlay_isolated"])
 
+    def test_evaluation_reports_measure_repetition(self):
+        score, performance = self.build_score()
+        metrics = evaluate_score(score, performance)
+        self.assertGreater(metrics["unique_measure_signatures"], 0)
+        self.assertGreater(metrics["longest_identical_measure_run"], 0)
+        self.assertEqual(
+            metrics["repetition_score_penalty"],
+            min(15, max(0, metrics["longest_identical_measure_run"] - 8)),
+        )
+
+    def test_musicxml_compiler_restores_blueprint_tempos_without_model_directions(self):
+        score, performance = self.build_score()
+        score.directions = []
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "score.musicxml"
+            write_musicxml(score, path)
+            root = ET.parse(path).getroot()
+            self.assertEqual(len(root.findall(".//sound[@tempo]")), len(score.plan.tempo_marks))
+            self.assertTrue(evaluate_score(score, performance, path)["tempo_overlay_isolated"])
+
+    def test_musicxml_compiler_separates_multiple_voices_on_one_staff(self):
+        score, _ = self.build_score()
+        score.notes = [
+            NoteEvent(id="right", measure=1, beat=0.0, duration=4.0, pitch=60, staff=1, voice=1),
+            NoteEvent(id="left-a", measure=1, beat=0.0, duration=4.0, pitch=48, staff=2, voice=5),
+            NoteEvent(id="left-b", measure=1, beat=0.0, duration=4.0, pitch=55, staff=2, voice=6),
+        ]
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "score.musicxml"
+            write_musicxml(score, path)
+            measure = ET.parse(path).getroot().find(".//measure[@number='1']")
+            self.assertEqual(len(measure.findall("./backup")), 2)
+            voice_six = next(note for note in measure.findall("./note") if note.findtext("./voice") == "6")
+            self.assertIsNone(voice_six.find("./chord"))
+
     def test_external_midi_import_keeps_micro_tempos_in_overlay(self):
         score, performance = self.build_score()
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -243,6 +278,7 @@ class ScoreFirstTest(unittest.TestCase):
             ):
                 self.assertTrue((output / filename).exists(), filename)
             self.assertIn("Section Timeline", (output / "gallery.html").read_text(encoding="utf-8"))
+            self.assertIn("max repeated-measure run", (output / "gallery.html").read_text(encoding="utf-8"))
 
     def test_pdmx_manifest_and_cloud_run_plan(self):
         with tempfile.TemporaryDirectory() as raw_dir:
