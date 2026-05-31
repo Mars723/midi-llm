@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 import json
@@ -155,6 +156,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         "candidate_failures": failures,
         "decode_completion": score.metadata.get("decode_completion"),
         "skipped_malformed_optional_rows": score.metadata.get("skipped_malformed_optional_rows", 0),
+        "trimmed_empty_trailing_measures": score.metadata.get("trimmed_empty_trailing_measures", 0),
         "prompt": args.prompt,
         "controls": asdict(controls),
         "metrics": metrics,
@@ -238,7 +240,7 @@ def _score_from_continuation(
     )
     score = decode_model_score(
         finalized,
-        plan,
+        deepcopy(plan),
         motif_bank,
         metadata={
             "score_source": "trained-scoredsl-adapter",
@@ -247,11 +249,28 @@ def _score_from_continuation(
             "skipped_malformed_optional_rows": skipped_optional_rows,
         },
     )
+    score.metadata["trimmed_empty_trailing_measures"] = _trim_single_empty_trailing_measure(score)
     errors = validate_score(score)
     errors.extend(_validate_generated_whole_piece(score))
     if errors:
         raise ValueError("; ".join(errors))
     return score
+
+
+def _trim_single_empty_trailing_measure(score: PianoScoreIR) -> int:
+    """Normalize a single empty terminal bar without accepting a truncated piece."""
+
+    if not score.notes:
+        return 0
+    realized_end = max(note.measure for note in score.notes)
+    if score.plan.measure_count - realized_end != 1:
+        return 0
+    score.plan.measure_count = realized_end
+    score.plan.sections[-1].end_measure = realized_end
+    score.plan.tempo_marks = [mark for mark in score.plan.tempo_marks if mark.measure <= realized_end]
+    score.directions = [direction for direction in score.directions if direction.measure <= realized_end]
+    score.layout_hints = [hint for hint in score.layout_hints if hint.measure <= realized_end]
+    return 1
 
 
 def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str, int]:

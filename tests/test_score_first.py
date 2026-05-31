@@ -146,6 +146,19 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(decoded.metadata["skipped_malformed_optional_rows"], 1)
         self.assertEqual(len(decoded.notes), len(score.notes))
 
+    def test_checkpoint_continuation_trims_one_empty_terminal_measure(self):
+        score, _ = self.build_score()
+        planned_measures = score.plan.measure_count
+        continuation = "\n".join(
+            line
+            for line in encode_model_score(score).splitlines()
+            if not line.startswith(f"NOTE [{planned_measures},")
+        )
+        decoded = _score_from_continuation(continuation, score.plan, score.motif_bank, "training_runs/test/adapter")
+        self.assertEqual(decoded.metadata["trimmed_empty_trailing_measures"], 1)
+        self.assertEqual(decoded.plan.measure_count, planned_measures - 1)
+        self.assertEqual(score.plan.measure_count, planned_measures)
+
     def test_checkpoint_continuation_rejects_measure_loop(self):
         score, _ = self.build_score()
         rows = ['SCORE ["compact-measure-interleaved-v3"]']
