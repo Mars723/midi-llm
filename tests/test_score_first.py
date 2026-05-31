@@ -1118,6 +1118,7 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertTrue((root / "automatic_results.csv").exists())
             self.assertTrue((root / "human_review.csv").exists())
             self.assertTrue((root / "release_gate.json").exists())
+            self.assertIn("two_staff_texture", (root / "human_review.csv").read_text(encoding="utf-8"))
             self.assertIn("piece_001/gallery.html", (root / "review_gallery.html").read_text(encoding="utf-8"))
 
     def test_release_gate_can_route_generation_through_checkpoint_adapter(self):

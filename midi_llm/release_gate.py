@@ -171,7 +171,7 @@ def _gallery_card(row: Dict[str, Any]) -> str:
     return f"""
       <article>
         <h3>{piece}</h3>
-        <p>{escape(row["genre"])} | {escape(row["form"])} | {escape(row["key"])} | score {row["structural_score"]}</p>
+        <p>{escape(row["genre"])} | {escape(row["form"])} | {escape(row["key"])} | score {row["structural_score"]} | lower staff {row["lower_staff_measure_coverage"]:.0%}</p>
         <a href="{piece}/gallery.html">Gallery</a>
         <a href="{piece}/score.pdf">PDF</a>
         <a href="{piece}/score.musicxml">MusicXML</a>
@@ -330,6 +330,7 @@ def _summarize(
                 "theme appears in planned positions",
                 "variations match the blueprint",
                 "section boundaries are not abrupt",
+                "both piano staves realize the requested texture",
                 "ending has an effective cadence",
                 "engraving is readable and professional",
             ],
@@ -369,6 +370,7 @@ def _write_review_sheet(path: Path, rows: Sequence[Dict[str, Any]]) -> None:
         "theme_positions",
         "variation_quality",
         "section_boundaries",
+        "two_staff_texture",
         "ending_cadence",
         "engraving_quality",
         "approved",
