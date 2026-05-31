@@ -62,9 +62,12 @@ This path preserves score-level notation such as tempo, dynamics, pedal
 markings, wedges, articulations, fingering, ties, voices, and staves in
 `PianoScoreIR` and `ScoreDSL`.
 
-Training and checkpoint generation use a separate compact `ModelScoreDSL v2`
-stream. Its fixed-column `SCORE`, `NOTE`, `DIRECTION`, `LAYOUT`, and
-`END_SCORE` lines avoid repeating the shared `PiecePlanIR` and `MotifBank`.
+Training and checkpoint generation use a separate compact `ModelScoreDSL v3`
+stream. Its fixed-column `SCORE`, `MEASURE`, `NOTE`, `DIRECTION`, `LAYOUT`,
+and `END_SCORE` lines avoid repeating the shared `PiecePlanIR` and `MotifBank`.
+Each `MEASURE` block emits score directions before notes so dynamics, pedal,
+wedges, and structural tempo markings are learned before the whole-piece
+boundary stop.
 The rich `score.dsl` artifact remains the exported notation representation.
 
 ## Release Gate

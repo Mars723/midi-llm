@@ -97,10 +97,12 @@ examples above the default `175000` character preflight budget. These examples
 remain available as source scores but are excluded from the QLoRA dataset
 without truncation.
 
-Model targets use compact fixed-column `ModelScoreDSL v2` rather than the rich
+Model targets use compact measure-interleaved `ModelScoreDSL v3` rather than the rich
 artifact JSON. The shared plan and motif bank stay in the prompt instead of
-being regenerated. Event rows use `SCORE`, `NOTE`, `DIRECTION`, `LAYOUT`, and
-`END_SCORE`, which shortens contexts and makes line-level syntax auditable.
+being regenerated. Event rows use `SCORE`, `MEASURE`, `NOTE`, `DIRECTION`,
+`LAYOUT`, and `END_SCORE`, which shortens contexts and makes line-level syntax
+auditable. Direction and layout rows appear inside their measure block before
+notes, so whole-piece generation cannot stop before score markings are emitted.
 The full `score.dsl`, `PianoScoreIR`, MusicXML, and PDF output contracts do not
 change.
 
@@ -113,6 +115,8 @@ change.
 4. Train bidirectional inpainting for boundaries, recapitulations, and endings.
 5. Fine-tune ending completion against the explicit future cadence target.
 6. Revise recapitulation spans against the shared motif bank and both neighbors.
+7. Revise contrast sections from notation-diverse scores to learn coherent
+   variation instead of repeated measure loops.
 
 Initialize from `slseanwu/MIDI-LLM_Llama-3.2-1B` and begin with QLoRA on a
 single NVIDIA GPU with 48-80GB VRAM. The first cloud run represents ScoreDSL
@@ -169,8 +173,8 @@ Because the upstream MIDI-LLM tokenizer has a large vocabulary, the launcher
 keeps full Transformer context but computes the LM head and cross-entropy in
 checkpointed `256`-token chunks by default. Override this with
 `--loss-chunk-tokens` only after a representative long-context probe.
-The compact v2 PDMX materialization has a measured maximum of `77897` tokens,
-so the default training context is `81920`; targets remain untruncated.
+The compact v3 PDMX materialization must be measured again before launch. The
+default training context remains `81920`; targets remain untruncated.
 The training step also applies explicit CUDA mixed-precision autocast and
 disables PyTorch's quadratic math-SDPA fallback. A host without a compatible
 fused attention kernel fails early instead of attempting an infeasible
@@ -190,10 +194,10 @@ JSONL splits. Each included file is SHA-256 checked before extraction:
 ```bash
 python -m midi_llm.package_cloud package \
   --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
-  --output training_bundles/score-first-model-dataset.tar.gz
+  --output training_bundles/score-first-model-dataset-v3.tar.gz
 
 python -m midi_llm.package_cloud verify \
-  --bundle training_bundles/score-first-model-dataset.tar.gz
+  --bundle training_bundles/score-first-model-dataset-v3.tar.gz
 ```
 
 On an Ubuntu NVIDIA host, clone this fork's `codex/score-first-piano-v1`
@@ -203,7 +207,7 @@ branch, upload the bundle, and bootstrap the environment:
 git clone --branch codex/score-first-piano-v1 \
   https://github.com/Mars723/midi-llm.git
 cd midi-llm
-bash scripts/bootstrap_score_first_gpu.sh /path/to/score-first-model-dataset.tar.gz
+bash scripts/bootstrap_score_first_gpu.sh /path/to/score-first-model-dataset-v3.tar.gz
 ```
 
 From the local workspace, the same clone, upload, checksum verification,
@@ -253,8 +257,19 @@ bash scripts/run_score_first_stages.sh whole-piece-focus
 
 This resumes the structural adapter and reinforces `whole-piece-generate`
 without discarding the local-window training. The sample helper uses this
-final adapter by default. Override it with `MIDI_LLM_SAMPLE_ADAPTER_DIR` only
-when comparing checkpoints.
+adapter as the v2 migration input.
+
+After materializing the v3 dataset, run the diversity refinement pipeline:
+
+```bash
+bash scripts/run_score_first_stages.sh diversity
+```
+
+It first teaches the v3 measure-interleaved grammar, then filters for
+notation-diverse source works with `--min-variation-score 0.55`, trains
+structural variation repair, and finishes with a whole-piece pass. The sample
+helper uses `07_diversity_whole_piece/adapter` by default. Override it with
+`MIDI_LLM_SAMPLE_ADAPTER_DIR` only when comparing checkpoints.
 
 Use `bash scripts/run_score_first_stages.sh all` when running every phase
 without an intermediate review.
@@ -263,7 +278,7 @@ Generate a complete score sample from a trained adapter:
 
 ```bash
 python -m midi_llm.generate_checkpoint \
-  --adapter-dir training_runs/score_first_intermediate_v2/04_whole_piece_focus/adapter \
+  --adapter-dir training_runs/score_first_intermediate_v2/07_diversity_whole_piece/adapter \
   --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
   --genre nocturne \
   --form ABA \

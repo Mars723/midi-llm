@@ -123,17 +123,7 @@ def _build_blueprint(row: Dict[str, Any], source: Path) -> Optional[Dict[str, An
         "quality_tier": row.get("quality_tier", "unlabeled"),
         "quality_score": row.get("quality_score"),
         "quality_evidence": row.get("quality_evidence", {}),
-        "tasks": row.get(
-            "tasks",
-            [
-                "score-dsl-autoencode",
-                "section-expand-16-64",
-                "whole-piece-generate",
-                "masked-span-inpaint",
-                "ending-complete",
-                "recapitulation-revise",
-            ],
-        ),
+        "tasks": _curriculum_tasks(row),
         **analysis,
         "sections": sections,
         "motif_references": {
@@ -191,6 +181,18 @@ def _examples_for_blueprint(blueprint: Dict[str, Any]) -> List[Dict[str, Any]]:
                 bidirectional=False,
             )
         )
+    contrast = next((section for section in blueprint["sections"] if section["role"] == "contrast"), None)
+    if contrast and "section-variation-revise" in tasks:
+        variation_start = contrast["start_measure"]
+        variation_end = min(contrast["end_measure"], variation_start + repair_size - 1)
+        examples.append(
+            _example(
+                blueprint,
+                "section-variation-revise",
+                [variation_start, variation_end],
+                bidirectional=True,
+            )
+        )
     recap = next((section for section in blueprint["sections"] if section["role"] == "return"), None)
     if recap and "recapitulation-revise" in tasks:
         examples.append(
@@ -202,6 +204,26 @@ def _examples_for_blueprint(blueprint: Dict[str, Any]) -> List[Dict[str, Any]]:
             )
         )
     return examples
+
+
+def _curriculum_tasks(row: Dict[str, Any]) -> List[str]:
+    tasks = list(
+        row.get(
+            "tasks",
+            [
+                "score-dsl-autoencode",
+                "section-expand-16-64",
+                "whole-piece-generate",
+                "masked-span-inpaint",
+                "ending-complete",
+                "recapitulation-revise",
+                "section-variation-revise",
+            ],
+        )
+    )
+    if row.get("quality_tier") in ("metadata-curated", "canonical-core") and "section-variation-revise" not in tasks:
+        tasks.append("section-variation-revise")
+    return tasks
 
 
 def _example(

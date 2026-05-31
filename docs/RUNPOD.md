@@ -60,6 +60,13 @@ ssh root@POD_IP -p SSH_PORT \
   'cd midi-llm && bash scripts/run_score_first_stages.sh whole-piece-focus'
 ```
 
+After deploying the v3 materialization, run the notation-diversity refinement:
+
+```bash
+ssh root@POD_IP -p SSH_PORT \
+  'cd midi-llm && bash scripts/run_score_first_stages.sh diversity'
+```
+
 Generate the first checkpoint-backed complete-piece sample:
 
 ```bash

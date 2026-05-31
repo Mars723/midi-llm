@@ -9,9 +9,9 @@ fi
 TARGET=$1
 PORT=${2:-22}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BUNDLE=${MIDI_LLM_BUNDLE:-"$ROOT/training_bundles/score-first-model-dataset.tar.gz"}
+BUNDLE=${MIDI_LLM_BUNDLE:-"$ROOT/training_bundles/score-first-model-dataset-v3.tar.gz"}
 REMOTE_ROOT=${MIDI_LLM_REMOTE_ROOT:-midi-llm}
-REMOTE_BUNDLE=${MIDI_LLM_REMOTE_BUNDLE:-score-first-model-dataset.tar.gz}
+REMOTE_BUNDLE=${MIDI_LLM_REMOTE_BUNDLE:-score-first-model-dataset-v3.tar.gz}
 REPO=${MIDI_LLM_REPO:-https://github.com/Mars723/midi-llm.git}
 BRANCH=${MIDI_LLM_BRANCH:-codex/score-first-piano-v1}
 

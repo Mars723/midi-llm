@@ -20,6 +20,11 @@ run_stage() {
   local tasks=$2
   local epochs=$3
   local resume_adapter=${4:-}
+  if [[ $# -ge 4 ]]; then
+    shift 4
+  else
+    shift "$#"
+  fi
   local args=(
     python -m midi_llm.train_scoredsl
     --dataset-dir "$DATASET"
@@ -30,6 +35,9 @@ run_stage() {
   )
   if [[ -n "$resume_adapter" ]]; then
     args+=(--resume-adapter-dir "$resume_adapter")
+  fi
+  if [[ $# -gt 0 ]]; then
+    args+=("$@")
   fi
   "${args[@]}"
 }
@@ -77,6 +85,34 @@ whole_piece_focus() {
     "$RUN_ROOT/03_structure/adapter"
 }
 
+v3_grammar() {
+  run_stage \
+    05_v3_grammar \
+    score-dsl-autoencode \
+    "${MIDI_LLM_V3_GRAMMAR_EPOCHS:-1}" \
+    "$RUN_ROOT/04_whole_piece_focus/adapter"
+}
+
+diversity_structure() {
+  run_stage \
+    06_diversity_structure \
+    section-expand-16-64,masked-span-inpaint,recapitulation-revise,section-variation-revise \
+    "${MIDI_LLM_DIVERSITY_STRUCTURE_EPOCHS:-1}" \
+    "$RUN_ROOT/05_v3_grammar/adapter" \
+    --min-variation-score "${MIDI_LLM_MIN_VARIATION_SCORE:-0.55}"
+}
+
+diversity_whole_piece() {
+  run_stage \
+    07_diversity_whole_piece \
+    ending-complete,whole-piece-generate,section-variation-revise \
+    "${MIDI_LLM_DIVERSITY_WHOLE_PIECE_EPOCHS:-2}" \
+    "$RUN_ROOT/06_diversity_structure/adapter" \
+    --min-variation-score "${MIDI_LLM_MIN_VARIATION_SCORE:-0.55}" \
+    --gradient-accumulation-steps "${MIDI_LLM_DIVERSITY_GRADIENT_ACCUMULATION_STEPS:-4}" \
+    --learning-rate "${MIDI_LLM_DIVERSITY_LEARNING_RATE:-0.0001}"
+}
+
 case "${1:-pilot}" in
   smoke)
     smoke
@@ -97,15 +133,23 @@ case "${1:-pilot}" in
   whole-piece-focus)
     whole_piece_focus
     ;;
+  diversity)
+    v3_grammar
+    diversity_structure
+    diversity_whole_piece
+    ;;
   all)
     smoke
     grammar
     whole_piece
     structure
     whole_piece_focus
+    v3_grammar
+    diversity_structure
+    diversity_whole_piece
     ;;
   *)
-    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|all}" >&2
     exit 2
     ;;
 esac

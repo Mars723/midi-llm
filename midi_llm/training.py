@@ -46,6 +46,12 @@ DEFAULT_PHASES = [
         "sample_scope": "recapitulation spans with motif bank and bidirectional neighboring context",
         "epochs": 1,
     },
+    {
+        "name": "section-variation-revise",
+        "objective": "Learn coherent variation and contrast instead of verbatim measure loops",
+        "sample_scope": "contrast sections from notation-diverse source scores with bidirectional neighboring context",
+        "epochs": 1,
+    },
 ]
 
 
@@ -66,7 +72,7 @@ def create_run_plan(
     run_plan = {
         "pipeline": "score-first-piano-training-v1",
         "base_model": "slseanwu/MIDI-LLM_Llama-3.2-1B",
-        "representation": "ModelScoreDSL compact fixed columns v2 with rich ScoreDSL artifacts",
+        "representation": "ModelScoreDSL compact measure-interleaved v3 with rich ScoreDSL artifacts",
         "adaptation": "QLoRA first with compact textual ModelScoreDSL tags in the upstream BPE vocabulary",
         "hardware": "single NVIDIA GPU with 48-80GB VRAM",
         "dataset_policy": (

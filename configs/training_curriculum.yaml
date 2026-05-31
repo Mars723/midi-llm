@@ -6,7 +6,7 @@ dataset:
   split_unit: normalized_work_id
 representation:
   score_artifact: ScoreDSL-1.0
-  model_target: ModelScoreDSL-compact-fixed-columns-v2
+  model_target: ModelScoreDSL-compact-measure-interleaved-v3
   performance: PianoPerformanceIR-1.0
 curriculum:
   - score-dsl-autoencode-16-measure-windows
@@ -15,6 +15,7 @@ curriculum:
   - masked-span-inpaint
   - ending-complete
   - recapitulation-revise
+  - section-variation-revise
 hardware:
   local: Apple-Silicon-development-and-rendering
   training: single-NVIDIA-48-80GB

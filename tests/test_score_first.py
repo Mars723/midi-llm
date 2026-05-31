@@ -34,6 +34,7 @@ from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structura
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score
 from midi_llm.musicxml_score import import_musicxml_score
+from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
 from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_manifest
@@ -81,13 +82,17 @@ class ScoreFirstTest(unittest.TestCase):
             [asdict(note) | {"id": None} for note in decoded.notes],
             [asdict(note) | {"id": None} for note in score.notes],
         )
-        self.assertEqual(decoded.directions, score.directions)
+        self.assertEqual(
+            sorted(tuple(asdict(direction).items()) for direction in decoded.directions),
+            sorted(tuple(asdict(direction).items()) for direction in score.directions),
+        )
 
     def test_checkpoint_continuation_uses_requested_whole_piece_plan(self):
         score, _ = self.build_score()
         model_input = _whole_piece_model_input(score.plan, score.motif_bank)
         self.assertEqual(model_input["target_range"], [1, score.plan.measure_count])
         self.assertEqual(model_input["future_ending_target"]["measure"], score.plan.measure_count)
+        self.assertEqual(model_input["notation_constraints"]["maximum_identical_measure_run"], 8)
         decoded = _score_from_continuation(
             encode_model_score(score) + "ignored trailing output",
             score.plan,
@@ -105,7 +110,8 @@ class ScoreFirstTest(unittest.TestCase):
         score, _ = self.build_score()
         truncated = "\n".join(
             (
-                'SCORE ["compact-fixed-columns-v2"]',
+                'SCORE ["compact-measure-interleaved-v3"]',
+                "MEASURE [1]",
                 "NOTE [1,0.0,1.0,60,1,1,null,null,false,false]",
                 "END_SCORE",
             )
@@ -125,11 +131,10 @@ class ScoreFirstTest(unittest.TestCase):
 
     def test_checkpoint_continuation_rejects_measure_loop(self):
         score, _ = self.build_score()
-        rows = ['SCORE ["compact-fixed-columns-v2"]']
-        rows.extend(
-            f"NOTE [{measure},0.0,1.0,60,1,1,null,null,false,false]"
-            for measure in range(1, score.plan.measure_count + 1)
-        )
+        rows = ['SCORE ["compact-measure-interleaved-v3"]']
+        for measure in range(1, score.plan.measure_count + 1):
+            rows.append(f"MEASURE [{measure}]")
+            rows.append(f"NOTE [{measure},0.0,1.0,60,1,1,null,null,false,false]")
         rows.append("END_SCORE")
         with self.assertRaisesRegex(ValueError, "identical measure content"):
             _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
@@ -326,7 +331,7 @@ class ScoreFirstTest(unittest.TestCase):
             run_plan = create_run_plan(manifest, root / "run_plan.json")
             self.assertEqual(
                 run_plan["representation"],
-                "ModelScoreDSL compact fixed columns v2 with rich ScoreDSL artifacts",
+                "ModelScoreDSL compact measure-interleaved v3 with rich ScoreDSL artifacts",
             )
             self.assertIn("whole-piece-generate", [phase["name"] for phase in run_plan["phases"]])
 
@@ -587,6 +592,9 @@ class ScoreFirstTest(unittest.TestCase):
                 {"articulations", "dynamics", "fingering", "pedal", "ties", "wedges"},
                 set(score.plan.markings),
             )
+            profile = analyze_notation(score)
+            self.assertEqual(profile["texture"], score.plan.texture)
+            self.assertIn(profile["variation_tier"], {"low", "moderate", "high"})
             self.assertEqual(score.layout_hints[0].measure, 2)
             self.assertEqual(validate_score(score), [])
 
@@ -616,6 +624,7 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(summary["source_scores_failed"], 0)
             self.assertGreater(summary["examples_written"], 0)
             self.assertEqual(summary["score_marking_counts"]["pedal"], 1)
+            self.assertEqual(summary["model_representation"], "compact-measure-interleaved-v3")
             rows = [
                 json.loads(line)
                 for line in (dataset_dir / "train.jsonl").read_text(encoding="utf-8").splitlines()
@@ -642,6 +651,7 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIsNotNone(local["model_input"]["left_neighbor_scoredsl"])
             self.assertIsNotNone(local["model_input"]["right_neighbor_scoredsl"])
             self.assertEqual(local["model_input"]["future_ending_target"]["measure"], 80)
+            self.assertEqual(local["model_input"]["notation_constraints"]["texture"], imported_score.plan.texture)
             fragment = decode_model_score(
                 local["target_scoredsl"],
                 imported_score.plan,
@@ -830,6 +840,35 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIn("--max-example-characters 1000", spec["launch_command"])
             self.assertIn("--max-steps 1", spec["launch_command"])
             self.assertIn("--loss-chunk-tokens 128", spec["launch_command"])
+
+    def test_training_spec_can_select_notation_diverse_sources(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            dataset = root / "dataset"
+            dataset.mkdir()
+            rows = [
+                {
+                    "example_id": f"example-{variation}",
+                    "task": "section-variation-revise",
+                    "notation_profile": {"variation_score": variation},
+                    "model_input": {"instruction": "Revise contrast."},
+                    "target_scoredsl": "END_SCORE\n",
+                }
+                for variation in (0.4, 0.7)
+            ]
+            (dataset / "train.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            spec = build_training_spec(
+                TrainConfig(
+                    dataset_dir=str(dataset),
+                    output_dir=str(root / "run"),
+                    min_variation_score=0.55,
+                )
+            )
+            self.assertEqual(spec["dataset"]["selected_examples"], 1)
+            self.assertIn("--min-variation-score 0.55", spec["launch_command"])
 
     def test_training_loss_weights_score_structure_and_target_prefix(self):
         class CharacterTokenizer:

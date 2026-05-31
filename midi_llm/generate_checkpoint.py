@@ -14,6 +14,7 @@ from .compiler import render_musescore, write_musicxml, write_performance_midi, 
 from .evaluate import evaluate_score
 from .gallery import write_gallery
 from .model_scoredsl import decode_model_score
+from .notation_analysis import intermediate_notation_constraints
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
 from .scoredsl import encode_score
@@ -218,6 +219,7 @@ def _whole_piece_model_input(plan: PiecePlanIR, motif_bank: MotifBank) -> Dict[s
             "measure": plan.measure_count,
             "cadence": plan.sections[-1].cadence,
         },
+        "notation_constraints": intermediate_notation_constraints(plan),
         "bidirectional": False,
     }
 
@@ -270,7 +272,7 @@ def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple
 
 def _model_event_measure(line: str) -> int | None:
     tag, separator, payload = line.partition(" ")
-    if not separator or tag not in ("NOTE", "DIRECTION", "LAYOUT"):
+    if not separator or tag not in ("MEASURE", "NOTE", "DIRECTION", "LAYOUT"):
         return None
     try:
         data = json.loads(payload)

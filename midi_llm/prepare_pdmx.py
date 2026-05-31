@@ -235,6 +235,7 @@ def prepare_manifest(
                     "section-expand-16-64",
                     "masked-span-inpaint",
                     "ending-complete",
+                    "section-variation-revise",
                 ],
                 "canonical-core": [
                     "score-dsl-autoencode",
@@ -243,6 +244,7 @@ def prepare_manifest(
                     "masked-span-inpaint",
                     "ending-complete",
                     "recapitulation-revise",
+                    "section-variation-revise",
                 ],
             },
         },
@@ -411,7 +413,7 @@ def _quality_matches(tier: str, requested: str) -> bool:
 def _tasks_for_quality(tier: str) -> List[str]:
     tasks = ["score-dsl-autoencode"]
     if tier in ("metadata-curated", "canonical-core"):
-        tasks.extend(["section-expand-16-64", "masked-span-inpaint", "ending-complete"])
+        tasks.extend(["section-expand-16-64", "masked-span-inpaint", "ending-complete", "section-variation-revise"])
     if tier == "canonical-core":
         tasks.extend(["whole-piece-generate", "recapitulation-revise"])
     return tasks

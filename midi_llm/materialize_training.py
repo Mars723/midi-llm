@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 
 from .model_scoredsl import MODEL_SCOREDLS_VERSION, encode_model_score
 from .musicxml_score import import_musicxml_score
+from .notation_analysis import analyze_notation, notation_constraints_from_profile
 from .scoredsl import encode_score
 from .score_ir import PianoScoreIR, validate_score, write_json
 from .train_scoredsl import model_prompt
@@ -41,6 +42,7 @@ def materialize_training_dataset(
         for row in _read_jsonl(curriculum_dir / "piece_blueprints.jsonl")
     }
     scores: Dict[str, PianoScoreIR] = {}
+    profiles: Dict[str, Dict[str, Any]] = {}
     errors: List[Dict[str, str]] = []
     for work_id, blueprint in blueprints.items():
         source = _resolve_source(root, blueprint["path"])
@@ -64,7 +66,11 @@ def materialize_training_dataset(
         except (OSError, ValueError, ET.ParseError) as error:
             errors.append({"work_id": work_id, "path": str(source), "reason": str(error)})
             continue
+        profile = analyze_notation(score)
+        score.plan.texture = profile["texture"]
+        score.metadata["notation_profile"] = profile
         scores[work_id] = score
+        profiles[work_id] = profile
         work_dir = scores_dir / work_id
         work_dir.mkdir(exist_ok=True)
         write_json(work_dir / "score.ir.json", score)
@@ -74,6 +80,8 @@ def materialize_training_dataset(
     split_rows: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
     task_counts: Counter[str] = Counter()
     quality_tier_counts: Counter[str] = Counter()
+    texture_counts: Counter[str] = Counter()
+    variation_tier_counts: Counter[str] = Counter()
     marking_counts: Counter[str] = Counter()
     skipped_examples = 0
     oversized_examples: List[Dict[str, Any]] = []
@@ -82,7 +90,8 @@ def materialize_training_dataset(
         if score is None:
             skipped_examples += 1
             continue
-        row = _materialize_example(score, example)
+        profile = profiles[example["work_id"]]
+        row = _materialize_example(score, example, profile)
         character_length = _example_character_length(row)
         if max_example_characters is not None and character_length > max_example_characters:
             oversized_examples.append(
@@ -103,6 +112,9 @@ def materialize_training_dataset(
         split_rows[example["split"]].append(row)
         task_counts[row["task"]] += 1
         quality_tier_counts[row["quality_tier"]] += 1
+    for profile in profiles.values():
+        texture_counts[profile["texture"]] += 1
+        variation_tier_counts[profile["variation_tier"]] += 1
     for score in scores.values():
         marking_counts.update(score.plan.markings)
     for split in ("train", "valid", "test"):
@@ -110,7 +122,7 @@ def materialize_training_dataset(
     _write_jsonl(output_dir / "materialization_errors.jsonl", errors)
     _write_jsonl(output_dir / "oversized_examples.jsonl", oversized_examples)
     summary = {
-        "pipeline": "score-first-model-dataset-v2",
+        "pipeline": "score-first-model-dataset-v3",
         "model_representation": MODEL_SCOREDLS_VERSION,
         "curriculum_dir": str(curriculum_dir.resolve()),
         "dataset_root": str(root.resolve()),
@@ -124,6 +136,8 @@ def materialize_training_dataset(
         "split_counts": {split: len(split_rows[split]) for split in ("train", "valid", "test")},
         "task_counts": dict(sorted(task_counts.items())),
         "example_quality_tier_counts": dict(sorted(quality_tier_counts.items())),
+        "score_texture_counts": dict(sorted(texture_counts.items())),
+        "score_variation_tier_counts": dict(sorted(variation_tier_counts.items())),
         "score_marking_counts": dict(sorted(marking_counts.items())),
         "invariants": {
             "targets_are_compact_model_scoredsl": True,
@@ -148,7 +162,7 @@ def materialize_training_dataset(
     return summary
 
 
-def _materialize_example(score: PianoScoreIR, example: Dict[str, Any]) -> Dict[str, Any]:
+def _materialize_example(score: PianoScoreIR, example: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
     start, end = example["target_range"]
     whole_piece = start == 1 and end == score.plan.measure_count
     left_range = example["context"].get("left_neighbor_range")
@@ -160,6 +174,7 @@ def _materialize_example(score: PianoScoreIR, example: Dict[str, Any]) -> Dict[s
         "split": example["split"],
         "task": example["task"],
         "quality_tier": example.get("quality_tier", "unlabeled"),
+        "notation_profile": profile,
         "prompt": score.plan.prompt,
         "target_scope": "complete-piece" if whole_piece else "fragment",
         "target_range": [start, end],
@@ -182,6 +197,7 @@ def _materialize_example(score: PianoScoreIR, example: Dict[str, Any]) -> Dict[s
             "left_neighbor_scoredsl": _encoded_range(score, left_range, "left-neighbor"),
             "right_neighbor_scoredsl": _encoded_range(score, right_range, "right-neighbor"),
             "future_ending_target": example["context"]["future_ending_target"],
+            "notation_constraints": notation_constraints_from_profile(profile, score.plan.difficulty),
             "bidirectional": example["context"]["bidirectional"],
         },
         "target_scoredsl": encode_model_score(target),
@@ -212,6 +228,7 @@ def _instruction(task: str) -> str:
         "masked-span-inpaint": "Repair the masked score span using both neighboring score fragments.",
         "ending-complete": "Complete the ending so the full-piece cadence target is realized.",
         "recapitulation-revise": "Revise the recapitulation so it returns to the planned thematic material.",
+        "section-variation-revise": "Revise the target section with coherent variation and contrast while preserving the shared plan.",
     }.get(task, f"Complete the notation-first score task: {task}.")
 
 

@@ -25,6 +25,7 @@ from .score_ir import (
     write_json,
 )
 from .scoredsl import encode_score
+from .notation_analysis import infer_texture
 
 
 MAJOR_KEYS = ("Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#")
@@ -76,7 +77,7 @@ def import_musicxml_score(
         meter=meter,
         tempo_bpm=initial_tempo,
         difficulty=difficulty or "unknown",
-        texture="imported-score",
+        texture=infer_texture(parsed["notes"]),
         sections=sections,
         key_route=[key for _ in sections],
         tempo_marks=tempo_marks,
