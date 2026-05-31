@@ -27,6 +27,7 @@ from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
     _measure_event_budget_exceeded,
+    _resume_hierarchical_score,
     _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
@@ -43,7 +44,7 @@ from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_ma
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
-from midi_llm.score_ir import NoteEvent, ScoreDirection, read_score, validate_score
+from midi_llm.score_ir import NoteEvent, PianoScoreIR, ScoreDirection, read_score, validate_score, write_json
 from midi_llm.training import create_run_plan
 from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
@@ -214,6 +215,24 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(second_input["piece_plan"]["measure_count"], score.plan.measure_count)
         self.assertIn("MEASURE", second_input["left_neighbor_scoredsl"])
         self.assertEqual(second_input["active_section"]["label"], second.label)
+
+    def test_hierarchical_resume_reuses_completed_section_prefix(self):
+        score, _ = self.build_score()
+        first = score.plan.sections[0]
+        partial = PianoScoreIR(
+            plan=score.plan,
+            motif_bank=score.motif_bank,
+            notes=[note for note in score.notes if note.measure <= first.end_measure],
+            directions=[direction for direction in score.directions if direction.measure <= first.end_measure],
+            layout_hints=[hint for hint in score.layout_hints if hint.measure <= first.end_measure],
+            metadata={"completed_section_labels": [first.label]},
+        )
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "partial.score.ir.json"
+            write_json(path, partial)
+            resumed = _resume_hierarchical_score(str(path), score.plan, score.motif_bank)
+        self.assertEqual(resumed.metadata["completed_section_labels"], [first.label])
+        self.assertEqual(resumed.notes, partial.notes)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:

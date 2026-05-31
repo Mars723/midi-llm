@@ -292,7 +292,9 @@ This path defaults to hierarchical sampling: each planned section reads the
 same whole-piece blueprint and motif bank plus the generated left neighbor,
 samples two alternatives, selects the stronger local fragment, and then the
 compiler merges sections into one complete score. Override this with
-`--section-candidates`. Use
+`--section-candidates`. Each selected section writes a
+`candidate_<n>.partial_after_<section>.score.ir.json` recovery point; pass one
+back through `--resume-score-ir` to retry only the remaining sections. Use
 `--strategy single-pass` only as a research comparison. Both paths reject
 malformed, truncated, low-diversity, continuously repeated, and short-period looped
 candidates before rendering. The performance overlay still uses the v1 rules

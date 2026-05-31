@@ -19,7 +19,7 @@ from .notation_analysis import intermediate_notation_constraints
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
 from .scoredsl import encode_score
-from .score_ir import MotifBank, PianoScoreIR, PiecePlanIR, validate_score, write_json
+from .score_ir import MotifBank, PianoScoreIR, PiecePlanIR, read_score, validate_score, write_json
 from .train_scoredsl import model_prompt
 
 
@@ -299,13 +299,17 @@ def _sample_hierarchical_score(
     candidate_number: int,
     seed: int,
 ) -> PianoScoreIR:
-    notes = []
-    directions = []
-    layout_hints = []
-    section_completions = []
-    section_selections = []
-    skipped_optional_rows = 0
+    resume_score = _resume_hierarchical_score(args.resume_score_ir, plan, motif_bank)
+    notes = deepcopy(resume_score.notes)
+    directions = deepcopy(resume_score.directions)
+    layout_hints = deepcopy(resume_score.layout_hints)
+    completed_section_labels = list(resume_score.metadata.get("completed_section_labels", []))
+    section_completions = list(resume_score.metadata.get("section_decode_completions", []))
+    section_selections = list(resume_score.metadata.get("section_selections", []))
+    skipped_optional_rows = resume_score.metadata.get("skipped_malformed_optional_rows", 0)
     for section_index, section in enumerate(plan.sections, start=1):
+        if section.label in completed_section_labels:
+            continue
         partial = PianoScoreIR(
             plan=plan,
             motif_bank=motif_bank,
@@ -374,6 +378,23 @@ def _sample_hierarchical_score(
             }
         )
         skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
+        completed_section_labels.append(section.label)
+        write_json(
+            candidate_dir / f"candidate_{candidate_number}.partial_after_{section_index}.score.ir.json",
+            PianoScoreIR(
+                plan=deepcopy(plan),
+                motif_bank=motif_bank,
+                notes=notes,
+                directions=directions,
+                layout_hints=layout_hints,
+                metadata={
+                    "completed_section_labels": completed_section_labels,
+                    "section_decode_completions": section_completions,
+                    "section_selections": section_selections,
+                    "skipped_malformed_optional_rows": skipped_optional_rows,
+                },
+            ),
+        )
     score = PianoScoreIR(
         plan=deepcopy(plan),
         motif_bank=motif_bank,
@@ -384,6 +405,7 @@ def _sample_hierarchical_score(
             "score_source": "trained-scoredsl-adapter",
             "adapter_dir": adapter_dir,
             "decode_completion": "hierarchical-sections",
+            "completed_section_labels": completed_section_labels,
             "section_decode_completions": section_completions,
             "section_selections": section_selections,
             "skipped_malformed_optional_rows": skipped_optional_rows,
@@ -395,6 +417,24 @@ def _sample_hierarchical_score(
     errors.extend(_validate_generated_whole_piece(score))
     if errors:
         raise ValueError("; ".join(errors))
+    return score
+
+
+def _resume_hierarchical_score(path: str | None, plan: PiecePlanIR, motif_bank: MotifBank) -> PianoScoreIR:
+    if not path:
+        return PianoScoreIR(plan=plan, motif_bank=motif_bank)
+    score = read_score(path)
+    if score.plan != plan:
+        raise ValueError("Resume score plan does not match requested whole-piece plan")
+    if score.motif_bank != motif_bank:
+        raise ValueError("Resume score motif bank does not match requested whole-piece motif bank")
+    completed = score.metadata.get("completed_section_labels", [])
+    labels = [section.label for section in plan.sections]
+    if completed != labels[: len(completed)]:
+        raise ValueError("Resume score completed sections must form a prefix of the whole-piece plan")
+    completed_end = plan.sections[len(completed) - 1].end_measure if completed else 0
+    if any(note.measure > completed_end for note in score.notes):
+        raise ValueError("Resume score contains notes beyond its completed section prefix")
     return score
 
 
@@ -724,6 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetition-penalty", type=float, default=1.01)
     parser.add_argument("--strategy", choices=("hierarchical", "single-pass"), default="hierarchical")
     parser.add_argument("--section-candidates", type=int, default=2)
+    parser.add_argument("--resume-score-ir")
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")
