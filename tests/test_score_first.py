@@ -27,6 +27,7 @@ from midi_llm.generate_checkpoint import _score_from_continuation, _whole_piece_
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.musicxml_score import import_musicxml_score
+from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
 from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_manifest
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
@@ -619,6 +620,59 @@ class ScoreFirstTest(unittest.TestCase):
         result = _validate_token_lengths([row], CharacterTokenizer(), max_seq_length=1)
         self.assertEqual(result["oversized_example_count"], 1)
         self.assertGreater(result["maximum_tokens"], 1)
+
+    def test_training_spec_can_resume_a_previous_adapter(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            dataset = root / "dataset"
+            dataset.mkdir()
+            (dataset / "train.jsonl").write_text(
+                json.dumps(
+                    {
+                        "example_id": "resume-example",
+                        "task": "whole-piece-generate",
+                        "model_input": {"instruction": "Generate score."},
+                        "target_scoredsl": "END_SCORE\n",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            spec = build_training_spec(
+                TrainConfig(
+                    dataset_dir=str(dataset),
+                    output_dir=str(root / "run"),
+                    resume_adapter_dir="training_runs/01_grammar/adapter",
+                )
+            )
+            self.assertEqual(spec["model"]["resume_adapter_dir"], "training_runs/01_grammar/adapter")
+            self.assertIn("--resume-adapter-dir training_runs/01_grammar/adapter", spec["launch_command"])
+
+    def test_cloud_bundle_excludes_score_cache_and_verifies_before_extract(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            dataset = root / "model_dataset"
+            dataset.mkdir()
+            for name in (
+                "train.jsonl",
+                "valid.jsonl",
+                "test.jsonl",
+                "summary.json",
+                "materialization_errors.jsonl",
+                "oversized_examples.jsonl",
+            ):
+                (dataset / name).write_text(f"{name}\n", encoding="utf-8")
+            score_cache = dataset / "scores" / "work-1"
+            score_cache.mkdir(parents=True)
+            (score_cache / "score.dsl").write_text("do not upload\n", encoding="utf-8")
+            bundle = root / "bundle.tar.gz"
+            packaged = package_cloud_dataset(dataset, bundle)
+            self.assertEqual(packaged["excluded_local_cache"], "scores/")
+            verification = verify_cloud_bundle(bundle)
+            self.assertEqual(len(verification["verified_files"]), 6)
+            extracted = extract_cloud_bundle(bundle, root / "remote")
+            self.assertTrue(Path(extracted["dataset_dir"], "train.jsonl").exists())
+            self.assertFalse(Path(extracted["dataset_dir"], "scores").exists())
 
     def test_release_gate_dry_run_writes_review_artifacts(self):
         with tempfile.TemporaryDirectory() as raw_dir:

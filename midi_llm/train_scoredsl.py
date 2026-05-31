@@ -42,6 +42,7 @@ class TrainConfig:
     dataset_dir: str
     output_dir: str
     base_model: str = "slseanwu/MIDI-LLM_Llama-3.2-1B"
+    resume_adapter_dir: str | None = None
     split: str = "train"
     tasks: Sequence[str] = ()
     max_seq_length: int = 65536
@@ -94,6 +95,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
         "model": {
             "base_model": config.base_model,
             "adapter": "QLoRA",
+            "resume_adapter_dir": config.resume_adapter_dir,
             "quantization": "4-bit NF4 with double quantization",
             "attention_implementation": "sdpa",
             "lora_targets": list(DEFAULT_LORA_TARGETS),
@@ -133,7 +135,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         )
 
     import torch
-    from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+    from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_for_kbit_training
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -173,16 +175,19 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
     )
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    model = get_peft_model(
-        model,
-        LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            target_modules=list(DEFAULT_LORA_TARGETS),
-        ),
-    )
+    if config.resume_adapter_dir:
+        model = PeftModel.from_pretrained(model, config.resume_adapter_dir, is_trainable=True)
+    else:
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                r=config.lora_r,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                target_modules=list(DEFAULT_LORA_TARGETS),
+            ),
+        )
     dataset = _tokenized_dataset(rows, tokenizer, config.max_seq_length)
     trainer = Trainer(
         model=model,
@@ -340,6 +345,7 @@ def _task_length_estimates(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
 
 def _launch_command(config: TrainConfig) -> str:
     tasks = f" --tasks {','.join(config.tasks)}" if config.tasks else ""
+    resume = f" --resume-adapter-dir {config.resume_adapter_dir}" if config.resume_adapter_dir else ""
     return (
         "python -m midi_llm.train_scoredsl"
         f" --dataset-dir {config.dataset_dir}"
@@ -348,6 +354,7 @@ def _launch_command(config: TrainConfig) -> str:
         f" --split {config.split}"
         f" --max-seq-length {config.max_seq_length}"
         f" --epochs {config.epochs}"
+        f"{resume}"
         f"{tasks}"
     )
 
@@ -365,6 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--base-model", default="slseanwu/MIDI-LLM_Llama-3.2-1B")
+    parser.add_argument("--resume-adapter-dir")
     parser.add_argument("--split", default="train")
     parser.add_argument("--tasks", help="Comma-separated curriculum tasks; defaults to every task in the split")
     parser.add_argument("--max-seq-length", type=int, default=65536)
@@ -382,6 +390,7 @@ def main() -> None:
         dataset_dir=args.dataset_dir,
         output_dir=args.output_dir,
         base_model=args.base_model,
+        resume_adapter_dir=args.resume_adapter_dir,
         split=args.split,
         tasks=tuple(task.strip() for task in args.tasks.split(",") if task.strip()) if args.tasks else (),
         max_seq_length=args.max_seq_length,

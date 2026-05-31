@@ -154,6 +154,53 @@ dry-run character-based token estimate is an early warning only; before the
 cloud launcher loads the model, it tokenizes every selected example and
 rejects the launch if the real tokenizer count exceeds the context budget.
 
+## GPU Host Handoff
+
+Package the minimal model-ready dataset locally. The archive deliberately
+excludes the normalized per-score cache because the trainer only reads the
+JSONL splits. Each included file is SHA-256 checked before extraction:
+
+```bash
+python -m midi_llm.package_cloud package \
+  --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
+  --output training_bundles/score-first-model-dataset.tar.gz
+
+python -m midi_llm.package_cloud verify \
+  --bundle training_bundles/score-first-model-dataset.tar.gz
+```
+
+On an Ubuntu NVIDIA host, clone this fork's `codex/score-first-piano-v1`
+branch, upload the bundle, and bootstrap the environment:
+
+```bash
+git clone --branch codex/score-first-piano-v1 \
+  https://github.com/Mars723/midi-llm.git
+cd midi-llm
+bash scripts/bootstrap_score_first_gpu.sh /path/to/score-first-model-dataset.tar.gz
+```
+
+Run the checkpoint-producing pilot curriculum:
+
+```bash
+bash scripts/run_score_first_stages.sh pilot
+bash scripts/generate_score_first_pilot_sample.sh
+```
+
+The `pilot` command first trains the `score-dsl-autoencode` grammar windows,
+then loads that adapter as trainable state for `ending-complete` and
+`whole-piece-generate`. This produces the first legitimate adapter-backed
+sample checkpoint. Continue with the more expensive structural phase after
+reviewing that sample:
+
+```bash
+bash scripts/run_score_first_stages.sh structure
+```
+
+The structural phase resumes the whole-piece adapter and trains
+`section-expand-16-64`, `masked-span-inpaint`, and `recapitulation-revise`.
+Use `bash scripts/run_score_first_stages.sh all` when running every phase
+without an intermediate review.
+
 Generate a complete score sample from a trained adapter:
 
 ```bash
