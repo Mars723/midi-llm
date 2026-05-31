@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VENV=${MIDI_LLM_VENV:-"$ROOT/.venv-score-first"}
 DATASET=${MIDI_LLM_DATASET:-"$ROOT/training_manifests/pdmx-intermediate/model_dataset"}
 RUN_ROOT=${MIDI_LLM_RUN_ROOT:-"$ROOT/training_runs/score_first_intermediate_v2"}
-MAX_SEQ_LENGTH=${MIDI_LLM_MAX_SEQ_LENGTH:-65536}
+MAX_SEQ_LENGTH=${MIDI_LLM_MAX_SEQ_LENGTH:-81920}
 
 if [[ ! -f "$VENV/bin/activate" ]]; then
   echo "Missing GPU environment: $VENV. Run scripts/bootstrap_score_first_gpu.sh first." >&2

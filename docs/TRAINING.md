@@ -154,7 +154,7 @@ have been reviewed:
 python -m midi_llm.train_scoredsl \
   --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
   --output-dir training_runs/score_first_v1 \
-  --max-seq-length 65536 \
+  --max-seq-length 81920 \
   --epochs 1
 ```
 
@@ -169,6 +169,8 @@ Because the upstream MIDI-LLM tokenizer has a large vocabulary, the launcher
 keeps full Transformer context but computes the LM head and cross-entropy in
 checkpointed `256`-token chunks by default. Override this with
 `--loss-chunk-tokens` only after a representative long-context probe.
+The compact v2 PDMX materialization has a measured maximum of `77897` tokens,
+so the default training context is `81920`; targets remain untruncated.
 The training step also applies explicit CUDA mixed-precision autocast and
 disables PyTorch's quadratic math-SDPA fallback. A host without a compatible
 fused attention kernel fails early instead of attempting an infeasible

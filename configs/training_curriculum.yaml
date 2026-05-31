@@ -20,6 +20,6 @@ hardware:
 trainer:
   adaptation: QLoRA-4bit-NF4
   tokenizer_strategy: reuse-upstream-bpe-for-pilot
-  max_seq_length: 65536
+  max_seq_length: 81920
   complete_piece_truncation: forbidden
   estimated_character_preflight_budget: 175000

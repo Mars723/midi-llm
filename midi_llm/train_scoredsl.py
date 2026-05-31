@@ -41,7 +41,7 @@ class TrainConfig:
     tasks: Sequence[str] = ()
     max_examples: int | None = None
     max_example_characters: int | None = None
-    max_seq_length: int = 65536
+    max_seq_length: int = 81920
     loss_chunk_tokens: int = 256
     structural_token_weight: float = 8.0
     target_prefix_tokens: int = 64
@@ -558,7 +558,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tasks", help="Comma-separated curriculum tasks; defaults to every task in the split")
     parser.add_argument("--max-examples", type=int, help="Select at most this many examples after task filtering")
     parser.add_argument("--max-example-characters", type=int, help="Exclude larger examples without truncating targets")
-    parser.add_argument("--max-seq-length", type=int, default=65536)
+    parser.add_argument("--max-seq-length", type=int, default=81920)
     parser.add_argument("--loss-chunk-tokens", type=int, default=256)
     parser.add_argument("--structural-token-weight", type=float, default=8.0)
     parser.add_argument("--target-prefix-tokens", type=int, default=64)
