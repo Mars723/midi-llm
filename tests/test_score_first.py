@@ -141,11 +141,15 @@ class ScoreFirstTest(unittest.TestCase):
         score, _ = self.build_score()
         continuation = encode_model_score(score).replace(
             "MEASURE [1]\n",
-            'MEASURE [1]\nDIRECTION [1,0.0,"words","Alto", slightly,null,null]\n',
+            (
+                'MEASURE [1]\n'
+                'DIRECTION [1,0.0,"words","Alto", slightly,null,null]\n'
+                'LAYOUT [1,"system-break","unexpected"]\n'
+            ),
             1,
         )
         decoded = _score_from_continuation(continuation, score.plan, score.motif_bank, "training_runs/test/adapter")
-        self.assertEqual(decoded.metadata["skipped_malformed_optional_rows"], 1)
+        self.assertEqual(decoded.metadata["skipped_malformed_optional_rows"], 2)
         self.assertEqual(len(decoded.notes), len(score.notes))
 
     def test_checkpoint_continuation_trims_one_empty_terminal_measure(self):

@@ -519,10 +519,11 @@ def _is_malformed_optional_event(line: str) -> bool:
     if not separator or tag not in ("DIRECTION", "LAYOUT"):
         return False
     try:
-        json.loads(payload)
+        data = json.loads(payload)
     except json.JSONDecodeError:
         return True
-    return False
+    expected_columns = 7 if tag == "DIRECTION" else 2
+    return not isinstance(data, list) or len(data) != expected_columns
 
 
 def _model_event_measure(line: str) -> int | None:
