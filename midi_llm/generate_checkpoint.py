@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
-from .evaluate import evaluate_score
+from .evaluate import _measure_repetition_metrics, evaluate_score
 from .gallery import write_gallery
 from .model_scoredsl import decode_model_score, model_score_generation_prefix
 from .notation_analysis import intermediate_notation_constraints
@@ -383,6 +383,14 @@ def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
         max_measure_run > 24 or max_measure_run / len(notes_by_measure) > 0.65
     ):
         errors.append("Generated score repeats identical measure content across most of the piece")
+    repetition = _measure_repetition_metrics(score)
+    if (
+        repetition["periodic_measure_loop_period"] is not None
+        and repetition["periodic_measure_loop_period"] <= 8
+        and repetition["periodic_measure_loop_span"] >= 16
+        and repetition["periodic_measure_loop_ratio"] > 0.65
+    ):
+        errors.append("Generated score repeats a short measure pattern across most of the piece")
     return errors
 
 

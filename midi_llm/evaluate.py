@@ -39,7 +39,12 @@ def evaluate_score(
     )
     duration_error = abs(duration_minutes - score.plan.duration_minutes) / score.plan.duration_minutes
     repetition = _measure_repetition_metrics(score)
-    repetition_penalty = min(15, max(0, repetition["longest_identical_measure_run"] - 8))
+    repetition_penalty = min(
+        30,
+        max(0, repetition["longest_identical_measure_run"] - 8)
+        + min(15, max(0, round((0.35 - repetition["unique_measure_signature_ratio"]) * 50)))
+        + min(15, max(0, round((repetition["periodic_measure_loop_ratio"] - 0.50) * 30))),
+    )
     structural_score = 100.0
     structural_score -= len(errors) * 20
     structural_score -= len(missing_refs) * 10
@@ -92,11 +97,33 @@ def _measure_repetition_metrics(score: PianoScoreIR) -> Dict[str, Any]:
         current_run = current_run + 1 if signature == prior_signature else 1
         prior_signature = signature
         longest_run = max(longest_run, current_run)
+    signatures = [tuple(notes_by_measure[measure]) for measure in sorted(notes_by_measure)]
+    periodic_measure_loop_period, periodic_measure_loop_span = _longest_periodic_measure_run(signatures)
     return {
-        "unique_measure_signatures": len({tuple(notes) for notes in notes_by_measure.values()}),
+        "unique_measure_signatures": len(set(signatures)),
+        "unique_measure_signature_ratio": round(len(set(signatures)) / len(signatures), 4) if signatures else 0.0,
         "longest_identical_measure_run": longest_run,
         "identical_measure_run_ratio": round(longest_run / len(notes_by_measure), 4) if notes_by_measure else 0.0,
+        "periodic_measure_loop_period": periodic_measure_loop_period,
+        "periodic_measure_loop_span": periodic_measure_loop_span,
+        "periodic_measure_loop_ratio": round(periodic_measure_loop_span / len(signatures), 4) if signatures else 0.0,
     }
+
+
+def _longest_periodic_measure_run(signatures, max_period: int = 8):
+    best_period = None
+    best_span = 0
+    for period in range(1, min(max_period, len(signatures) // 2) + 1):
+        current_span = period
+        for index in range(period, len(signatures)):
+            if signatures[index] == signatures[index - period]:
+                current_span += 1
+                if current_span >= period * 2 and current_span > best_span:
+                    best_period = period
+                    best_span = current_span
+            else:
+                current_span = period
+    return best_period, best_span
 
 
 def evaluate_run(run_dir: Path | str) -> Dict[str, Any]:

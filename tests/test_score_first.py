@@ -169,6 +169,16 @@ class ScoreFirstTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identical measure content"):
             _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
 
+    def test_checkpoint_continuation_rejects_short_periodic_measure_loop(self):
+        score, _ = self.build_score()
+        rows = ['SCORE ["compact-measure-interleaved-v3"]']
+        for measure in range(1, score.plan.measure_count + 1):
+            rows.append(f"MEASURE [{measure}]")
+            rows.append(f"NOTE [{measure},0.0,1.0,{60 + measure % 2},1,1,null,null,false,false]")
+        rows.append("END_SCORE")
+        with self.assertRaisesRegex(ValueError, "short measure pattern"):
+            _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
+
     def test_checkpoint_sampling_defaults_to_validated_temperature(self):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
         self.assertEqual(args.temperature, 0.8)
@@ -222,11 +232,13 @@ class ScoreFirstTest(unittest.TestCase):
         score, performance = self.build_score()
         metrics = evaluate_score(score, performance)
         self.assertGreater(metrics["unique_measure_signatures"], 0)
+        self.assertGreater(metrics["unique_measure_signature_ratio"], 0)
         self.assertGreater(metrics["longest_identical_measure_run"], 0)
-        self.assertEqual(
+        self.assertGreaterEqual(
             metrics["repetition_score_penalty"],
             min(15, max(0, metrics["longest_identical_measure_run"] - 8)),
         )
+        self.assertIn("periodic_measure_loop_span", metrics)
 
     def test_musicxml_compiler_restores_blueprint_tempos_without_model_directions(self):
         score, performance = self.build_score()
@@ -324,6 +336,7 @@ class ScoreFirstTest(unittest.TestCase):
                 self.assertTrue((output / filename).exists(), filename)
             self.assertIn("Section Timeline", (output / "gallery.html").read_text(encoding="utf-8"))
             self.assertIn("max repeated-measure run", (output / "gallery.html").read_text(encoding="utf-8"))
+            self.assertIn("periodic loop span", (output / "gallery.html").read_text(encoding="utf-8"))
 
     def test_pdmx_manifest_and_cloud_run_plan(self):
         with tempfile.TemporaryDirectory() as raw_dir:
