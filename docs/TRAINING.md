@@ -187,6 +187,10 @@ command after SSH access is configured:
 bash scripts/deploy_score_first_gpu.sh root@GPU_HOST 22
 ```
 
+See [`RUNPOD.md`](RUNPOD.md) for the shortest provider-specific setup path.
+Use Full SSH with a public IP: Runpod's basic proxied SSH does not support the
+`scp` upload used by the deploy helper.
+
 Run a one-step real-sample CUDA smoke test before spending time on the
 checkpoint-producing pilot curriculum:
 
