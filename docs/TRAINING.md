@@ -179,12 +179,20 @@ cd midi-llm
 bash scripts/bootstrap_score_first_gpu.sh /path/to/score-first-model-dataset.tar.gz
 ```
 
-Run the checkpoint-producing pilot curriculum:
+Run a one-step real-sample CUDA smoke test before spending time on the
+checkpoint-producing pilot curriculum:
 
 ```bash
+bash scripts/run_score_first_stages.sh smoke
 bash scripts/run_score_first_stages.sh pilot
 bash scripts/generate_score_first_pilot_sample.sh
 ```
+
+The `smoke` command trains one optimizer step against up to eight genuine
+ScoreDSL grammar examples below an `8192` token context limit. It exercises
+CUDA model loading, 4-bit QLoRA, forward/backward passes, optimizer state, and
+adapter saving. Its short-example filter is isolated to smoke testing; it does
+not alter the pilot dataset or truncate targets.
 
 The `pilot` command first trains the `score-dsl-autoencode` grammar windows,
 then loads that adapter as trainable state for `ending-complete` and

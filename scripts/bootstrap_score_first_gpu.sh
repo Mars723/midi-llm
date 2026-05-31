@@ -31,4 +31,5 @@ python -m midi_llm.train_scoredsl \
   --dry-run
 
 echo "GPU bootstrap complete."
-echo "Run: scripts/run_score_first_stages.sh pilot"
+echo "Run: scripts/run_score_first_stages.sh smoke"
+echo "Then: scripts/run_score_first_stages.sh pilot"

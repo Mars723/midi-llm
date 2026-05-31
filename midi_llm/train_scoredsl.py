@@ -45,8 +45,11 @@ class TrainConfig:
     resume_adapter_dir: str | None = None
     split: str = "train"
     tasks: Sequence[str] = ()
+    max_examples: int | None = None
+    max_example_characters: int | None = None
     max_seq_length: int = 65536
     epochs: float = 1.0
+    max_steps: int = -1
     learning_rate: float = 2e-4
     batch_size: int = 1
     gradient_accumulation_steps: int = 16
@@ -61,10 +64,17 @@ class TrainConfig:
 def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
     """Write a launch spec without importing heavyweight cloud dependencies."""
 
+    _validate_config(config)
     dataset_dir = Path(config.dataset_dir)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows = _selected_rows(dataset_dir, config.split, config.tasks)
+    rows = _selected_rows(
+        dataset_dir,
+        config.split,
+        config.tasks,
+        max_examples=config.max_examples,
+        max_example_characters=config.max_example_characters,
+    )
     lengths = [_character_length(row) for row in rows]
     estimated_tokens = math.ceil(max(lengths, default=0) / 3)
     materialization_summary = _read_json_if_exists(dataset_dir / "summary.json")
@@ -119,11 +129,26 @@ def dependency_report() -> Dict[str, bool]:
     return {package: find_spec(package) is not None for package in REQUIRED_RUNTIME_PACKAGES}
 
 
+def _validate_config(config: TrainConfig) -> None:
+    if config.max_seq_length < 1:
+        raise ValueError("max_seq_length must be positive")
+    if config.max_steps == 0 or config.max_steps < -1:
+        raise ValueError("max_steps must be -1 or positive")
+    if config.gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be positive")
+
+
 def run_training(config: TrainConfig) -> Dict[str, Any]:
     """Launch QLoRA training. Heavy packages are imported only on the GPU host."""
 
     spec = build_training_spec(config)
-    rows = _selected_rows(Path(config.dataset_dir), config.split, config.tasks)
+    rows = _selected_rows(
+        Path(config.dataset_dir),
+        config.split,
+        config.tasks,
+        max_examples=config.max_examples,
+        max_example_characters=config.max_example_characters,
+    )
     if not rows:
         raise RuntimeError(f"No examples selected from split {config.split!r}")
     missing = [package for package, available in dependency_report().items() if not available]
@@ -194,6 +219,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         args=TrainingArguments(
             output_dir=config.output_dir,
             num_train_epochs=config.epochs,
+            max_steps=config.max_steps,
             learning_rate=config.learning_rate,
             per_device_train_batch_size=config.batch_size,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
@@ -224,16 +250,29 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
     return result
 
 
-def _selected_rows(dataset_dir: Path, split: str, tasks: Sequence[str]) -> List[Dict[str, Any]]:
+def _selected_rows(
+    dataset_dir: Path,
+    split: str,
+    tasks: Sequence[str],
+    *,
+    max_examples: int | None = None,
+    max_example_characters: int | None = None,
+) -> List[Dict[str, Any]]:
     path = dataset_dir / f"{split}.jsonl"
     if not path.exists():
         raise ValueError(f"Dataset split does not exist: {path}")
+    if max_examples is not None and max_examples < 1:
+        raise ValueError("max_examples must be positive when provided")
+    if max_example_characters is not None and max_example_characters < 1:
+        raise ValueError("max_example_characters must be positive when provided")
     selected = set(tasks)
-    return [
+    rows = [
         row
         for row in _read_jsonl(path)
-        if not selected or row["task"] in selected
+        if (not selected or row["task"] in selected)
+        and (max_example_characters is None or _character_length(row) <= max_example_characters)
     ]
+    return rows[:max_examples] if max_examples is not None else rows
 
 
 def _tokenized_dataset(rows, tokenizer, max_seq_length):
@@ -346,6 +385,13 @@ def _task_length_estimates(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
 def _launch_command(config: TrainConfig) -> str:
     tasks = f" --tasks {','.join(config.tasks)}" if config.tasks else ""
     resume = f" --resume-adapter-dir {config.resume_adapter_dir}" if config.resume_adapter_dir else ""
+    max_examples = f" --max-examples {config.max_examples}" if config.max_examples is not None else ""
+    max_characters = (
+        f" --max-example-characters {config.max_example_characters}"
+        if config.max_example_characters is not None
+        else ""
+    )
+    max_steps = f" --max-steps {config.max_steps}" if config.max_steps >= 0 else ""
     return (
         "python -m midi_llm.train_scoredsl"
         f" --dataset-dir {config.dataset_dir}"
@@ -356,6 +402,9 @@ def _launch_command(config: TrainConfig) -> str:
         f" --epochs {config.epochs}"
         f"{resume}"
         f"{tasks}"
+        f"{max_examples}"
+        f"{max_characters}"
+        f"{max_steps}"
     )
 
 
@@ -375,8 +424,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-adapter-dir")
     parser.add_argument("--split", default="train")
     parser.add_argument("--tasks", help="Comma-separated curriculum tasks; defaults to every task in the split")
+    parser.add_argument("--max-examples", type=int, help="Select at most this many examples after task filtering")
+    parser.add_argument("--max-example-characters", type=int, help="Exclude larger examples without truncating targets")
     parser.add_argument("--max-seq-length", type=int, default=65536)
     parser.add_argument("--epochs", type=float, default=1.0)
+    parser.add_argument("--max-steps", type=int, default=-1, help="Override epoch count with a bounded optimizer-step run")
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
@@ -393,8 +445,11 @@ def main() -> None:
         resume_adapter_dir=args.resume_adapter_dir,
         split=args.split,
         tasks=tuple(task.strip() for task in args.tasks.split(",") if task.strip()) if args.tasks else (),
+        max_examples=args.max_examples,
+        max_example_characters=args.max_example_characters,
         max_seq_length=args.max_seq_length,
         epochs=args.epochs,
+        max_steps=args.max_steps,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,

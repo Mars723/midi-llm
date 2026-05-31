@@ -34,6 +34,18 @@ run_stage() {
   "${args[@]}"
 }
 
+smoke() {
+  python -m midi_llm.train_scoredsl \
+    --dataset-dir "$DATASET" \
+    --output-dir "$RUN_ROOT/00_smoke" \
+    --tasks score-dsl-autoencode \
+    --max-example-characters "${MIDI_LLM_SMOKE_MAX_EXAMPLE_CHARACTERS:-18000}" \
+    --max-examples "${MIDI_LLM_SMOKE_MAX_EXAMPLES:-8}" \
+    --max-seq-length "${MIDI_LLM_SMOKE_MAX_SEQ_LENGTH:-8192}" \
+    --max-steps "${MIDI_LLM_SMOKE_MAX_STEPS:-1}" \
+    --gradient-accumulation-steps 1
+}
+
 grammar() {
   run_stage \
     01_grammar \
@@ -58,6 +70,9 @@ structure() {
 }
 
 case "${1:-pilot}" in
+  smoke)
+    smoke
+    ;;
   grammar)
     grammar
     ;;
@@ -72,12 +87,13 @@ case "${1:-pilot}" in
     structure
     ;;
   all)
+    smoke
     grammar
     whole_piece
     structure
     ;;
   *)
-    echo "Usage: $0 {grammar|whole-piece|pilot|structure|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|all}" >&2
     exit 2
     ;;
 esac

@@ -648,6 +648,39 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(spec["model"]["resume_adapter_dir"], "training_runs/01_grammar/adapter")
             self.assertIn("--resume-adapter-dir training_runs/01_grammar/adapter", spec["launch_command"])
 
+    def test_training_spec_can_bound_a_real_sample_smoke_run(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            dataset = root / "dataset"
+            dataset.mkdir()
+            rows = [
+                {
+                    "example_id": f"example-{index}",
+                    "task": "score-dsl-autoencode",
+                    "model_input": {"instruction": "Reconstruct score."},
+                    "target_scoredsl": "END_SCORE\n" * index,
+                }
+                for index in range(1, 5)
+            ]
+            (dataset / "train.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            spec = build_training_spec(
+                TrainConfig(
+                    dataset_dir=str(dataset),
+                    output_dir=str(root / "run"),
+                    max_examples=2,
+                    max_example_characters=1000,
+                    max_steps=1,
+                    gradient_accumulation_steps=1,
+                )
+            )
+            self.assertEqual(spec["dataset"]["selected_examples"], 2)
+            self.assertIn("--max-examples 2", spec["launch_command"])
+            self.assertIn("--max-example-characters 1000", spec["launch_command"])
+            self.assertIn("--max-steps 1", spec["launch_command"])
+
     def test_cloud_bundle_excludes_score_cache_and_verifies_before_extract(self):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
