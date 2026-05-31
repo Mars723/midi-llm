@@ -185,6 +185,18 @@ class ScoreFirstTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "short measure pattern"):
             _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
 
+    def test_evaluator_rejects_low_measure_diversity(self):
+        score, _ = self.build_score()
+        rows = ['SCORE ["compact-measure-interleaved-v3"]']
+        for measure in range(1, score.plan.measure_count + 1):
+            rows.append(f"MEASURE [{measure}]")
+            rows.append(f"NOTE [{measure},0.0,1.0,{60 + measure % 13},1,1,null,null,false,false]")
+        rows.append("END_SCORE")
+        decoded = _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
+        metrics = evaluate_score(decoded, render_performance(decoded, seed=24))
+        self.assertFalse(metrics["measure_diversity_acceptable"])
+        self.assertFalse(metrics["valid"])
+
     def test_checkpoint_sampling_defaults_to_validated_temperature(self):
         args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
         self.assertEqual(args.temperature, 0.8)

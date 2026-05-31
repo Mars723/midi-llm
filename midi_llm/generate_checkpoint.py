@@ -132,6 +132,8 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
                 score = _score_from_continuation(continuation, plan, motif_bank, args.adapter_dir)
             performance = render_performance(score, seed=seed + 10_000)
             metrics = evaluate_score(score, performance)
+            if not metrics["valid"]:
+                raise ValueError(f"Generated candidate failed quality gate: {json.dumps(metrics, sort_keys=True)}")
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             failures.append({"candidate": index + 1, "reason": str(error)})
             continue
@@ -432,6 +434,11 @@ def _score_fragment_from_continuation(
     if measure_note_counts and max(measure_note_counts.values()) > 64:
         errors.append("Generated fragment exceeds the per-measure notation event budget")
     repetition = _measure_repetition_metrics(score)
+    realized_measure_count = len(realized_measures)
+    if realized_measure_count >= 16 and repetition["unique_measure_signature_ratio"] < 0.25:
+        errors.append("Generated fragment does not contain enough unique measure content")
+    if repetition["longest_identical_measure_run"] > 8:
+        errors.append("Generated fragment repeats identical measure content too many times in sequence")
     if (
         repetition["periodic_measure_loop_period"] is not None
         and repetition["periodic_measure_loop_span"] >= 16
