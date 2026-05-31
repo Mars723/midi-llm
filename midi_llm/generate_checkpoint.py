@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
+from collections import Counter
 from typing import Any, Dict, List, Tuple
 
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
@@ -212,9 +213,46 @@ def _score_from_continuation(
         metadata={"score_source": "trained-scoredsl-adapter", "adapter_dir": adapter_dir},
     )
     errors = validate_score(score)
+    errors.extend(_validate_generated_whole_piece(score))
     if errors:
         raise ValueError("; ".join(errors))
     return score
+
+
+def _validate_generated_whole_piece(score: PianoScoreIR) -> List[str]:
+    """Reject truncated or locally collapsed samples before rendering."""
+
+    realized_measures = {note.measure for note in score.notes}
+    errors = []
+    if 1 not in realized_measures:
+        errors.append("Generated score does not realize the opening measure")
+    if score.plan.measure_count not in realized_measures:
+        errors.append(f"Generated score does not realize planned final measure {score.plan.measure_count}")
+    missing_sections = [
+        section.label
+        for section in score.plan.sections
+        if not any(section.start_measure <= measure <= section.end_measure for measure in realized_measures)
+    ]
+    if missing_sections:
+        errors.append(f"Generated score does not realize planned sections: {', '.join(missing_sections)}")
+    note_rows = Counter(
+        (
+            note.measure,
+            note.beat,
+            note.duration,
+            note.pitch,
+            note.staff,
+            note.voice,
+            note.articulation,
+            note.fingering,
+            note.tie_start,
+            note.tie_stop,
+        )
+        for note in score.notes
+    )
+    if note_rows and max(note_rows.values()) > 8:
+        errors.append("Generated score repeats an identical notation row more than 8 times")
+    return errors
 
 
 def _load_checkpoint(base_model: str, adapter_dir: str):
@@ -254,7 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--title")
     parser.add_argument("--candidates", type=int, default=4)
     parser.add_argument("--seed", type=int, default=23)
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--skip-musescore", action="store_true")

@@ -245,6 +245,17 @@ bash scripts/run_score_first_stages.sh structure
 
 The structural phase resumes the whole-piece adapter and trains
 `section-expand-16-64`, `masked-span-inpaint`, and `recapitulation-revise`.
+Run a final complete-piece focus pass after the structural phase:
+
+```bash
+bash scripts/run_score_first_stages.sh whole-piece-focus
+```
+
+This resumes the structural adapter and reinforces `whole-piece-generate`
+without discarding the local-window training. The sample helper uses this
+final adapter by default. Override it with `MIDI_LLM_SAMPLE_ADAPTER_DIR` only
+when comparing checkpoints.
+
 Use `bash scripts/run_score_first_stages.sh all` when running every phase
 without an intermediate review.
 
@@ -252,7 +263,7 @@ Generate a complete score sample from a trained adapter:
 
 ```bash
 python -m midi_llm.generate_checkpoint \
-  --adapter-dir training_runs/score_first_v1/adapter \
+  --adapter-dir training_runs/score_first_intermediate_v2/04_whole_piece_focus/adapter \
   --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
   --genre nocturne \
   --form ABA \
@@ -260,10 +271,11 @@ python -m midi_llm.generate_checkpoint \
   --output-dir generated_score_first/checkpoint_sample_001
 ```
 
-This path samples ScoreDSL notes from the adapter, rejects malformed candidates,
-keeps the requested whole-piece plan authoritative, and renders the selected
-complete score to the same Gallery artifacts as the local baseline. The
-performance overlay still uses the v1 rules renderer.
+This path samples compact model-facing ScoreDSL notes from the adapter, rejects
+malformed, truncated, and locally collapsed candidates, keeps the requested
+whole-piece plan authoritative, and renders the selected complete score to the
+same Gallery artifacts as the local baseline. The performance overlay still
+uses the v1 rules renderer.
 
 ## Complete-Piece Release Gate
 

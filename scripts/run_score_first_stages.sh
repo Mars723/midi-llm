@@ -69,6 +69,14 @@ structure() {
     "$RUN_ROOT/02_whole_piece/adapter"
 }
 
+whole_piece_focus() {
+  run_stage \
+    04_whole_piece_focus \
+    whole-piece-generate \
+    "${MIDI_LLM_WHOLE_PIECE_FOCUS_EPOCHS:-3}" \
+    "$RUN_ROOT/03_structure/adapter"
+}
+
 case "${1:-pilot}" in
   smoke)
     smoke
@@ -86,14 +94,18 @@ case "${1:-pilot}" in
   structure)
     structure
     ;;
+  whole-piece-focus)
+    whole_piece_focus
+    ;;
   all)
     smoke
     grammar
     whole_piece
     structure
+    whole_piece_focus
     ;;
   *)
-    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|all}" >&2
     exit 2
     ;;
 esac

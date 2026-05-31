@@ -5,7 +5,8 @@ dataset:
   genres: [classical-piano, etude, nocturne, waltz, prelude, minuet, impromptu, theme-and-variations]
   split_unit: normalized_work_id
 representation:
-  score: ScoreDSL-1.0
+  score_artifact: ScoreDSL-1.0
+  model_target: ModelScoreDSL-compact-fixed-columns-v2
   performance: PianoPerformanceIR-1.0
 curriculum:
   - score-dsl-autoencode-16-measure-windows

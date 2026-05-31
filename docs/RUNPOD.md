@@ -1,7 +1,7 @@
 # Runpod GPU Host Setup
 
 Use a Runpod Pod only after reviewing its billed hourly rate in the console.
-The score-first pilot is designed for a single `A100 PCIe 80GB` or
+The score-first pilot is designed for a single `A100 PCIe/SXM 80GB` or
 `H100 PCIe 80GB` GPU.
 
 ## Create The Pod
@@ -9,7 +9,7 @@ The score-first pilot is designed for a single `A100 PCIe 80GB` or
 1. Add the local public SSH key from `~/.ssh/id_ed25519.pub` to the Runpod
    account settings.
 2. Create a Pod using an official Runpod PyTorch template.
-3. Select one GPU: `A100 PCIe 80GB` is the default cost-conscious choice.
+3. Select one GPU: `A100 PCIe/SXM 80GB` is the default cost-conscious choice.
 4. Allocate at least `50GB` container disk and `50GB` persistent volume.
 5. Enable Full SSH with a public IP and TCP port `22`.
 6. Copy the `SSH over exposed TCP` command from the Pod's Connect tab.
@@ -48,6 +48,16 @@ After smoke succeeds, run the adapter-producing pilot:
 ```bash
 ssh root@POD_IP -p SSH_PORT \
   'cd midi-llm && bash scripts/run_score_first_stages.sh pilot'
+```
+
+Run the structural and complete-piece focus phases before producing the
+reviewable sample:
+
+```bash
+ssh root@POD_IP -p SSH_PORT \
+  'cd midi-llm && bash scripts/run_score_first_stages.sh structure'
+ssh root@POD_IP -p SSH_PORT \
+  'cd midi-llm && bash scripts/run_score_first_stages.sh whole-piece-focus'
 ```
 
 Generate the first checkpoint-backed complete-piece sample:

@@ -24,7 +24,12 @@ from midi_llm.fetch_pdmx import (
     _validate_coverage,
 )
 from midi_llm.gallery import write_gallery
-from midi_llm.generate_checkpoint import _CandidateFileStreamer, _score_from_continuation, _whole_piece_model_input
+from midi_llm.generate_checkpoint import (
+    _CandidateFileStreamer,
+    _score_from_continuation,
+    _whole_piece_model_input,
+    build_parser as build_checkpoint_parser,
+)
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score
@@ -95,6 +100,22 @@ class ScoreFirstTest(unittest.TestCase):
             [asdict(note) | {"id": None} for note in score.notes],
         )
         self.assertEqual(decoded.metadata["score_source"], "trained-scoredsl-adapter")
+
+    def test_checkpoint_continuation_rejects_truncated_piece(self):
+        score, _ = self.build_score()
+        truncated = "\n".join(
+            (
+                'SCORE ["compact-fixed-columns-v2"]',
+                "NOTE [1,0.0,1.0,60,1,1,null,null,false,false]",
+                "END_SCORE",
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "planned final measure"):
+            _score_from_continuation(truncated, score.plan, score.motif_bank, "training_runs/test/adapter")
+
+    def test_checkpoint_sampling_defaults_to_validated_low_temperature(self):
+        args = build_checkpoint_parser().parse_args(("--adapter-dir", "adapter", "--prompt", "prompt"))
+        self.assertEqual(args.temperature, 0.5)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:
