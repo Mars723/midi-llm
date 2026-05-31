@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import asdict
 import io
 import json
 from pathlib import Path
@@ -26,6 +27,7 @@ from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import _CandidateFileStreamer, _score_from_continuation, _whole_piece_model_input
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
+from midi_llm.model_scoredsl import decode_model_score, encode_model_score
 from midi_llm.musicxml_score import import_musicxml_score
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
@@ -33,7 +35,7 @@ from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_ma
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
-from midi_llm.score_ir import validate_score
+from midi_llm.score_ir import read_score, validate_score
 from midi_llm.training import create_run_plan
 from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
@@ -65,19 +67,33 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(decoded.notes, score.notes)
         self.assertEqual(decoded.directions, score.directions)
 
+    def test_model_scoredsl_round_trip_uses_shared_blueprint(self):
+        score, _ = self.build_score()
+        decoded = decode_model_score(encode_model_score(score), score.plan, score.motif_bank)
+        self.assertEqual(decoded.plan, score.plan)
+        self.assertEqual(decoded.motif_bank, score.motif_bank)
+        self.assertEqual(
+            [asdict(note) | {"id": None} for note in decoded.notes],
+            [asdict(note) | {"id": None} for note in score.notes],
+        )
+        self.assertEqual(decoded.directions, score.directions)
+
     def test_checkpoint_continuation_uses_requested_whole_piece_plan(self):
         score, _ = self.build_score()
         model_input = _whole_piece_model_input(score.plan, score.motif_bank)
         self.assertEqual(model_input["target_range"], [1, score.plan.measure_count])
         self.assertEqual(model_input["future_ending_target"]["measure"], score.plan.measure_count)
         decoded = _score_from_continuation(
-            encode_score(score) + "ignored trailing output",
+            encode_model_score(score) + "ignored trailing output",
             score.plan,
             score.motif_bank,
             "training_runs/test/adapter",
         )
         self.assertEqual(decoded.plan, score.plan)
-        self.assertEqual(decoded.notes, score.notes)
+        self.assertEqual(
+            [asdict(note) | {"id": None} for note in decoded.notes],
+            [asdict(note) | {"id": None} for note in score.notes],
+        )
         self.assertEqual(decoded.metadata["score_source"], "trained-scoredsl-adapter")
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
@@ -229,7 +245,10 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(summary["accepted_unique_solo_piano_works"], 1)
             manifest = root / "manifest" / "pdmx_score_first_manifest.jsonl"
             run_plan = create_run_plan(manifest, root / "run_plan.json")
-            self.assertEqual(run_plan["representation"], "ScoreDSL 1.0")
+            self.assertEqual(
+                run_plan["representation"],
+                "ModelScoreDSL compact fixed columns v2 with rich ScoreDSL artifacts",
+            )
             self.assertIn("whole-piece-generate", [phase["name"] for phase in run_plan["phases"]])
 
     def test_official_pdmx_manifest_labels_intermediate_solo_piano(self):
@@ -524,7 +543,12 @@ class ScoreFirstTest(unittest.TestCase):
             ]
             whole = next(row for row in rows if row["task"] == "whole-piece-generate")
             self.assertEqual(whole["target_range"], [1, 80])
-            decoded_whole = decode_score(whole["target_scoredsl"])
+            imported_score = read_score(dataset_dir / "scores" / "work-notation" / "score.ir.json")
+            decoded_whole = decode_model_score(
+                whole["target_scoredsl"],
+                imported_score.plan,
+                imported_score.motif_bank,
+            )
             self.assertEqual(decoded_whole.plan.measure_count, 80)
             self.assertEqual(decoded_whole.plan.genre, "unclassified-piano")
             local = next(
@@ -539,7 +563,11 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIsNotNone(local["model_input"]["left_neighbor_scoredsl"])
             self.assertIsNotNone(local["model_input"]["right_neighbor_scoredsl"])
             self.assertEqual(local["model_input"]["future_ending_target"]["measure"], 80)
-            fragment = decode_score(local["target_scoredsl"])
+            fragment = decode_model_score(
+                local["target_scoredsl"],
+                imported_score.plan,
+                imported_score.motif_bank,
+            )
             self.assertTrue(all(local["target_range"][0] <= note.measure <= local["target_range"][1] for note in fragment.notes))
             spec = build_training_spec(
                 TrainConfig(
@@ -729,7 +757,7 @@ class ScoreFirstTest(unittest.TestCase):
             def __call__(self, text, add_special_tokens=False):
                 return {"input_ids": list(text)}
 
-        target_ids = list("x SCHEMA payload\nNOTE payload\n")
+        target_ids = list("x SCORE payload\nNOTE payload\n")
         weights = _target_loss_weights(
             target_ids,
             CharacterTokenizer(),
@@ -738,9 +766,9 @@ class ScoreFirstTest(unittest.TestCase):
             target_prefix_weight=4.0,
         )
         self.assertEqual(weights[0], 4.0)
-        schema_start = target_ids.index("S")
+        score_start = target_ids.index("S")
         note_start = "".join(target_ids).index("NOTE")
-        self.assertTrue(all(weight == 8.0 for weight in weights[schema_start : schema_start + len("SCHEMA")]))
+        self.assertTrue(all(weight == 8.0 for weight in weights[score_start : score_start + len("SCORE")]))
         self.assertTrue(all(weight == 8.0 for weight in weights[note_start : note_start + len("NOTE")]))
 
     def test_cloud_bundle_excludes_score_cache_and_verifies_before_extract(self):

@@ -97,6 +97,13 @@ examples above the default `175000` character preflight budget. These examples
 remain available as source scores but are excluded from the QLoRA dataset
 without truncation.
 
+Model targets use compact fixed-column `ModelScoreDSL v2` rather than the rich
+artifact JSON. The shared plan and motif bank stay in the prompt instead of
+being regenerated. Event rows use `SCORE`, `NOTE`, `DIRECTION`, `LAYOUT`, and
+`END_SCORE`, which shortens contexts and makes line-level syntax auditable.
+The full `score.dsl`, `PianoScoreIR`, MusicXML, and PDF output contracts do not
+change.
+
 ## Curriculum
 
 1. Learn valid `ScoreDSL` syntax with `16` measure score autoencoding windows.
@@ -115,7 +122,7 @@ pilot. Treat dedicated ScoreDSL embedding and LM-head warm-up as a separate
 follow-up experiment.
 
 The current repository prepares deterministic training indexes, materialized
-ScoreDSL targets, and a decision-complete cloud run plan. It does not claim
+ModelScoreDSL targets, and a decision-complete cloud run plan. It does not claim
 that a ScoreDSL adapter has already been trained.
 
 ## Cloud QLoRA Launch
@@ -152,8 +159,8 @@ python -m midi_llm.train_scoredsl \
 ```
 
 The launcher uses 4-bit NF4 QLoRA with PyTorch SDPA attention, represents
-ScoreDSL semantic tags with the existing tokenizer vocabulary, masks the
-prompt portion of labels, and trains only against ScoreDSL targets. It refuses
+ModelScoreDSL semantic tags with the existing tokenizer vocabulary, masks the
+prompt portion of labels, and trains only against compact score targets. It refuses
 to silently truncate any target when `max_seq_length` is too small. The
 dry-run character-based token estimate is an early warning only; before the
 cloud launcher loads the model, it tokenizes every selected example and

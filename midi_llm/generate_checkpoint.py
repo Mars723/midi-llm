@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
@@ -12,9 +12,10 @@ from typing import Any, Dict, List, Tuple
 from .compiler import render_musescore, write_musicxml, write_performance_midi, write_score_midi
 from .evaluate import evaluate_score
 from .gallery import write_gallery
+from .model_scoredsl import decode_model_score
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
-from .scoredsl import decode_score, encode_score
+from .scoredsl import encode_score
 from .score_ir import MotifBank, PianoScoreIR, PiecePlanIR, validate_score, write_json
 from .train_scoredsl import model_prompt
 
@@ -204,12 +205,11 @@ def _score_from_continuation(
     end = continuation.find("END_SCORE")
     if end < 0:
         raise ValueError("Generated ScoreDSL does not contain END_SCORE")
-    score = decode_score(continuation[: end + len("END_SCORE")])
-    score = replace(
-        score,
-        plan=plan,
-        motif_bank=motif_bank,
-        metadata={**score.metadata, "score_source": "trained-scoredsl-adapter", "adapter_dir": adapter_dir},
+    score = decode_model_score(
+        continuation[: end + len("END_SCORE")],
+        plan,
+        motif_bank,
+        metadata={"score_source": "trained-scoredsl-adapter", "adapter_dir": adapter_dir},
     )
     errors = validate_score(score)
     if errors:

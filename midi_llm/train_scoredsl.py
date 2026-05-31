@@ -10,16 +10,10 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
+from .model_scoredsl import MODEL_SCOREDLS_TAGS, MODEL_SCOREDLS_VERSION
 
 SCOREDLS_TOKENS = (
-    "SCHEMA",
-    "PLAN",
-    "MOTIF_BANK",
-    "NOTE",
-    "DIRECTION",
-    "LAYOUT",
-    "METADATA",
-    "END_SCORE",
+    *MODEL_SCOREDLS_TAGS,
     "<SCORE_FIRST_INPUT>",
     "<SCORE_FIRST_TARGET>",
 )
@@ -115,6 +109,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "attention_fallback_policy": "disable quadratic math SDPA fallback on CUDA",
             "lora_targets": list(DEFAULT_LORA_TARGETS),
             "scoredsl_tag_strings": list(SCOREDLS_TOKENS),
+            "model_representation": MODEL_SCOREDLS_VERSION,
             "tokenizer_strategy": "reuse upstream BPE vocabulary; do not freeze randomly initialized added-token rows",
             "complete_piece_truncation_policy": "forbidden",
             "loss_strategy": "checkpointed chunked LM-head cross-entropy",
@@ -430,7 +425,7 @@ def _target_loss_weights(
     weights = [1.0] * len(target_ids)
     for index in range(min(target_prefix_tokens, len(weights))):
         weights[index] = max(weights[index], target_prefix_weight)
-    for tag in SCOREDLS_TOKENS[:8]:
+    for tag in MODEL_SCOREDLS_TAGS:
         tag_ids = tokenizer(tag, add_special_tokens=False)["input_ids"]
         for start in range(len(target_ids) - len(tag_ids) + 1):
             if target_ids[start : start + len(tag_ids)] == tag_ids:

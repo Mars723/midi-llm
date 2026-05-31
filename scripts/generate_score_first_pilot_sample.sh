@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VENV=${MIDI_LLM_VENV:-"$ROOT/.venv-score-first"}
-RUN_ROOT=${MIDI_LLM_RUN_ROOT:-"$ROOT/training_runs/score_first_intermediate_v1"}
+RUN_ROOT=${MIDI_LLM_RUN_ROOT:-"$ROOT/training_runs/score_first_intermediate_v2"}
 OUTPUT=${MIDI_LLM_SAMPLE_OUTPUT:-"$ROOT/generated_score_first/checkpoint_sample_001"}
 
 if [[ ! -f "$VENV/bin/activate" ]]; then

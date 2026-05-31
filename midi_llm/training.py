@@ -66,8 +66,8 @@ def create_run_plan(
     run_plan = {
         "pipeline": "score-first-piano-training-v1",
         "base_model": "slseanwu/MIDI-LLM_Llama-3.2-1B",
-        "representation": "ScoreDSL 1.0",
-        "adaptation": "QLoRA first with textual ScoreDSL tags in the upstream BPE vocabulary",
+        "representation": "ModelScoreDSL compact fixed columns v2 with rich ScoreDSL artifacts",
+        "adaptation": "QLoRA first with compact textual ModelScoreDSL tags in the upstream BPE vocabulary",
         "hardware": "single NVIDIA GPU with 48-80GB VRAM",
         "dataset_policy": (
             "PDMX no_license_conflict + all_valid + best unique arrangement solo-piano core "

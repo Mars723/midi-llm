@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Sequence
 import xml.etree.ElementTree as ET
 
+from .model_scoredsl import MODEL_SCOREDLS_VERSION, encode_model_score
 from .musicxml_score import import_musicxml_score
 from .scoredsl import encode_score
 from .score_ir import PianoScoreIR, validate_score, write_json
@@ -68,6 +69,7 @@ def materialize_training_dataset(
         work_dir.mkdir(exist_ok=True)
         write_json(work_dir / "score.ir.json", score)
         (work_dir / "score.dsl").write_text(encode_score(score), encoding="utf-8")
+        (work_dir / "score.model.dsl").write_text(encode_model_score(score), encoding="utf-8")
 
     split_rows: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
     task_counts: Counter[str] = Counter()
@@ -108,7 +110,8 @@ def materialize_training_dataset(
     _write_jsonl(output_dir / "materialization_errors.jsonl", errors)
     _write_jsonl(output_dir / "oversized_examples.jsonl", oversized_examples)
     summary = {
-        "pipeline": "score-first-model-dataset-v1",
+        "pipeline": "score-first-model-dataset-v2",
+        "model_representation": MODEL_SCOREDLS_VERSION,
         "curriculum_dir": str(curriculum_dir.resolve()),
         "dataset_root": str(root.resolve()),
         "source_scores_imported": len(scores),
@@ -123,7 +126,8 @@ def materialize_training_dataset(
         "example_quality_tier_counts": dict(sorted(quality_tier_counts.items())),
         "score_marking_counts": dict(sorted(marking_counts.items())),
         "invariants": {
-            "targets_are_scoredsl": True,
+            "targets_are_compact_model_scoredsl": True,
+            "rich_score_dsl_is_preserved_as_authoritative_artifact": True,
             "complete_piece_targets_are_not_truncated": True,
             "oversized_targets_are_excluded_without_truncation": True,
             "local_targets_read_complete_piece_plan": True,
@@ -132,7 +136,7 @@ def materialize_training_dataset(
             "performance_microtempo_is_not_materialized_as_score_tempo": True,
         },
         "artifacts": {
-            "scores": "scores/<work_id>/score.ir.json and score.dsl",
+            "scores": "scores/<work_id>/score.ir.json, score.dsl, and score.model.dsl",
             "train": "train.jsonl",
             "valid": "valid.jsonl",
             "test": "test.jsonl",
@@ -180,7 +184,7 @@ def _materialize_example(score: PianoScoreIR, example: Dict[str, Any]) -> Dict[s
             "future_ending_target": example["context"]["future_ending_target"],
             "bidirectional": example["context"]["bidirectional"],
         },
-        "target_scoredsl": encode_score(target),
+        "target_scoredsl": encode_model_score(target),
     }
 
 
@@ -197,7 +201,7 @@ def _slice_score(score: PianoScoreIR, start: int, end: int, role: str) -> PianoS
 def _encoded_range(score: PianoScoreIR, measure_range: Optional[Sequence[int]], role: str) -> Optional[str]:
     if not measure_range:
         return None
-    return encode_score(_slice_score(score, measure_range[0], measure_range[1], role))
+    return encode_model_score(_slice_score(score, measure_range[0], measure_range[1], role))
 
 
 def _instruction(task: str) -> str:

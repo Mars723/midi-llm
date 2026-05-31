@@ -20,7 +20,7 @@ python -m midi_llm.compose \
 Each run contains:
 
 - `score.ir.json`: authoritative notation IR
-- `score.dsl`: model-facing line-oriented representation
+- `score.dsl`: rich authoritative line-oriented score artifact
 - `score.musicxml`, `score.mscz`, `score.pdf`, `score-*.png`: engraved score
 - `score.mid`: quantized notation playback
 - `performance.ir.json`, `performance.mid`: expressive overlay and playback
@@ -61,6 +61,11 @@ python -m midi_llm.musicxml_score \
 This path preserves score-level notation such as tempo, dynamics, pedal
 markings, wedges, articulations, fingering, ties, voices, and staves in
 `PianoScoreIR` and `ScoreDSL`.
+
+Training and checkpoint generation use a separate compact `ModelScoreDSL v2`
+stream. Its fixed-column `SCORE`, `NOTE`, `DIRECTION`, `LAYOUT`, and
+`END_SCORE` lines avoid repeating the shared `PiecePlanIR` and `MotifBank`.
+The rich `score.dsl` artifact remains the exported notation representation.
 
 ## Release Gate
 
