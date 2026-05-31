@@ -100,7 +100,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
     candidates: List[Tuple[float, int, PianoScoreIR, Any, Dict[str, Any]]] = []
     failures = []
     for index in range(args.candidates):
-        seed = args.seed + index
+        seed = args.seed + index * (args.section_candidates if args.strategy == "hierarchical" else 1)
         print(f"Sampling checkpoint candidate {index + 1}/{args.candidates} with seed={seed}", flush=True)
         try:
             if args.strategy == "hierarchical":
