@@ -107,22 +107,18 @@ def write_musicxml(score: PianoScoreIR, path: Path | str) -> Path:
     for note in score.notes:
         notes_by_measure[note.measure].append(note)
     for direction in score.directions:
+        if direction.kind == "tempo":
+            continue
         directions_by_measure[direction.measure].append(direction)
-    explicit_tempos = {
-        (direction.measure, _direction_tempo(direction))
-        for direction in score.directions
-        if direction.kind == "tempo"
-    }
     for mark in score.plan.tempo_marks:
-        if (mark.measure, mark.bpm) not in explicit_tempos:
-            directions_by_measure[mark.measure].append(
-                ScoreDirection(
-                    measure=mark.measure,
-                    beat=0.0,
-                    kind="tempo",
-                    value=f"{mark.bpm}|{mark.text}",
-                )
+        directions_by_measure[mark.measure].append(
+            ScoreDirection(
+                measure=mark.measure,
+                beat=0.0,
+                kind="tempo",
+                value=f"{mark.bpm}|{mark.text}",
             )
+        )
 
     for measure_number in range(1, score.plan.measure_count + 1):
         measure = ET.SubElement(part, "measure", number=str(measure_number))
@@ -259,15 +255,6 @@ def _append_direction(measure: ET.Element, direction: ScoreDirection) -> None:
     if direction.beat:
         ET.SubElement(element, "offset").text = str(_ticks(direction.beat))
     ET.SubElement(element, "staff").text = str(direction.staff)
-
-
-def _direction_tempo(direction: ScoreDirection) -> int | float | None:
-    raw_bpm, _, _text = direction.value.partition("|")
-    try:
-        bpm = float(raw_bpm)
-    except ValueError:
-        return None
-    return round(bpm) if bpm.is_integer() else bpm
 
 
 def _append_staff_notes(

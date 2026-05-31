@@ -41,7 +41,7 @@ from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_ma
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
-from midi_llm.score_ir import NoteEvent, read_score, validate_score
+from midi_llm.score_ir import NoteEvent, ScoreDirection, read_score, validate_score
 from midi_llm.training import create_run_plan
 from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
@@ -231,6 +231,16 @@ class ScoreFirstTest(unittest.TestCase):
     def test_musicxml_compiler_restores_blueprint_tempos_without_model_directions(self):
         score, performance = self.build_score()
         score.directions = []
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "score.musicxml"
+            write_musicxml(score, path)
+            root = ET.parse(path).getroot()
+            self.assertEqual(len(root.findall(".//sound[@tempo]")), len(score.plan.tempo_marks))
+            self.assertTrue(evaluate_score(score, performance, path)["tempo_overlay_isolated"])
+
+    def test_musicxml_compiler_filters_model_tempos_outside_blueprint(self):
+        score, performance = self.build_score()
+        score.directions.append(ScoreDirection(measure=2, beat=0.0, kind="tempo", value="200|microtempo"))
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "score.musicxml"
             write_musicxml(score, path)
