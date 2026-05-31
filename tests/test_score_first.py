@@ -649,6 +649,10 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertIn("--resume-adapter-dir training_runs/01_grammar/adapter", spec["launch_command"])
             self.assertEqual(spec["model"]["loss_strategy"], "checkpointed chunked LM-head cross-entropy")
             self.assertEqual(spec["model"]["loss_chunk_tokens"], 256)
+            self.assertEqual(
+                spec["model"]["attention_fallback_policy"],
+                "disable quadratic math SDPA fallback on CUDA",
+            )
             self.assertIn("--loss-chunk-tokens 256", spec["launch_command"])
 
     def test_training_spec_can_bound_a_real_sample_smoke_run(self):

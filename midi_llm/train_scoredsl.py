@@ -109,6 +109,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "resume_adapter_dir": config.resume_adapter_dir,
             "quantization": "4-bit NF4 with double quantization",
             "attention_implementation": "sdpa",
+            "attention_fallback_policy": "disable quadratic math SDPA fallback on CUDA",
             "lora_targets": list(DEFAULT_LORA_TARGETS),
             "scoredsl_tag_strings": list(SCOREDLS_TOKENS),
             "tokenizer_strategy": "reuse upstream BPE vocabulary; do not freeze randomly initialized added-token rows",
@@ -176,6 +177,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
 
     if not torch.cuda.is_available():
         raise RuntimeError("QLoRA launch requires an NVIDIA CUDA GPU; use --dry-run on local development machines")
+    _configure_memory_efficient_sdpa(torch)
     tokenizer = AutoTokenizer.from_pretrained(config.base_model, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -202,6 +204,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         device_map="auto",
         quantization_config=quantization,
         attn_implementation="sdpa",
+        dtype=torch.bfloat16 if config.bf16 else torch.float16,
     )
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
@@ -221,6 +224,11 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
     dataset = _tokenized_dataset(rows, tokenizer, config.max_seq_length)
 
     class ChunkedCausalLMTrainer(Trainer):
+        def training_step(self, model, inputs, num_items_in_batch=None):
+            compute_dtype = torch.bfloat16 if config.bf16 else torch.float16
+            with torch.autocast(device_type="cuda", dtype=compute_dtype):
+                return super().training_step(model, inputs, num_items_in_batch)
+
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             loss = _checkpointed_chunked_causal_lm_loss(model, inputs, config.loss_chunk_tokens)
             return (loss, {"loss": loss}) if return_outputs else loss
@@ -366,6 +374,14 @@ def _checkpointed_chunked_causal_lm_loss(model, inputs, loss_chunk_tokens):
         for start in range(0, shifted_hidden_states.shape[1], loss_chunk_tokens)
     ]
     return torch.stack(losses).sum() / valid_token_count
+
+
+def _configure_memory_efficient_sdpa(torch):
+    """Require fused CUDA attention instead of an infeasible quadratic fallback."""
+
+    if not torch.backends.cuda.is_flash_attention_available():
+        raise RuntimeError("Score-First long-context training requires CUDA Flash-SDPA support")
+    torch.backends.cuda.enable_math_sdp(False)
 
 
 def _validate_token_lengths(rows, tokenizer, max_seq_length):

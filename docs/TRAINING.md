@@ -162,6 +162,10 @@ Because the upstream MIDI-LLM tokenizer has a large vocabulary, the launcher
 keeps full Transformer context but computes the LM head and cross-entropy in
 checkpointed `256`-token chunks by default. Override this with
 `--loss-chunk-tokens` only after a representative long-context probe.
+The training step also applies explicit CUDA mixed-precision autocast and
+disables PyTorch's quadratic math-SDPA fallback. A host without a compatible
+fused attention kernel fails early instead of attempting an infeasible
+full-attention allocation.
 
 ## GPU Host Handoff
 
