@@ -179,6 +179,14 @@ cd midi-llm
 bash scripts/bootstrap_score_first_gpu.sh /path/to/score-first-model-dataset.tar.gz
 ```
 
+From the local workspace, the same clone, upload, checksum verification,
+dependency installation, and preflight sequence can be executed with one
+command after SSH access is configured:
+
+```bash
+bash scripts/deploy_score_first_gpu.sh root@GPU_HOST 22
+```
+
 Run a one-step real-sample CUDA smoke test before spending time on the
 checkpoint-producing pilot curriculum:
 
