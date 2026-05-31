@@ -29,6 +29,7 @@ from midi_llm.generate_checkpoint import (
     _ending_fragment_has_tonic,
     _measure_event_budget_exceeded,
     _resume_hierarchical_score,
+    _rewrite_final_tonic_cadence,
     _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
@@ -243,6 +244,18 @@ class ScoreFirstTest(unittest.TestCase):
             if note.measure == final_measure and note.staff == 1:
                 note.pitch += 1
         self.assertFalse(_ending_fragment_has_tonic(score))
+
+    def test_cadence_repair_rewrites_only_final_measure(self):
+        score, _ = self.build_score()
+        final_measure = max(note.measure for note in score.notes)
+        earlier_notes = [note for note in score.notes if note.measure != final_measure]
+        _rewrite_final_tonic_cadence(score)
+        self.assertEqual(
+            [note for note in score.notes if note.measure != final_measure],
+            earlier_notes,
+        )
+        self.assertTrue(_ending_fragment_has_tonic(score))
+        self.assertEqual(score.metadata["cadence_repair"]["measure"], final_measure)
 
     def test_checkpoint_streamer_skips_prompt_and_persists_incremental_tokens(self):
         class FakeTensor:

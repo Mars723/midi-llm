@@ -297,7 +297,10 @@ compiler merges sections into one complete score. Override this with
 back through `--resume-score-ir` to retry only the remaining sections. Use
 `--strategy single-pass` only as a research comparison. Both paths reject
 malformed, truncated, low-diversity, continuously repeated, and short-period looped
-candidates before rendering. The performance overlay still uses the v1 rules
+candidates before rendering. Hierarchical sampling prefers a model-generated
+tonic ending; if every otherwise valid return-section alternative misses that
+target, it records `cadence_repair` and rewrites only the terminal measure as a
+tonic chord. The performance overlay still uses the v1 rules
 renderer. The pilot defaults to `temperature=0.8` and a light
 `repetition_penalty=1.01`; the sample helper exposes both through environment
 variables for checkpoint comparisons.

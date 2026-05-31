@@ -19,7 +19,7 @@ from .notation_analysis import intermediate_notation_constraints
 from .planner import controls_from_mapping, create_piece_plan, read_controls
 from .rules import create_motif_bank, render_performance
 from .scoredsl import encode_score
-from .score_ir import MotifBank, PianoScoreIR, PiecePlanIR, read_score, validate_score, write_json
+from .score_ir import MotifBank, NoteEvent, PianoScoreIR, PiecePlanIR, read_score, validate_score, write_json
 from .train_scoredsl import model_prompt
 
 
@@ -307,6 +307,7 @@ def _sample_hierarchical_score(
     section_completions = list(resume_score.metadata.get("section_decode_completions", []))
     section_selections = list(resume_score.metadata.get("section_selections", []))
     skipped_optional_rows = resume_score.metadata.get("skipped_malformed_optional_rows", 0)
+    cadence_repair_required = False
     for section_index, section in enumerate(plan.sections, start=1):
         if section.label in completed_section_labels:
             continue
@@ -318,6 +319,7 @@ def _sample_hierarchical_score(
             layout_hints=layout_hints,
         )
         fragments = []
+        repairable_fragments = []
         fragment_failures = []
         for attempt in range(1, args.section_candidates + 1):
             attempt_seed = seed + (section_index - 1) * 100 + attempt - 1
@@ -344,9 +346,29 @@ def _sample_hierarchical_score(
                     allow_terminal_empty=section_index == len(plan.sections),
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                if section_index == len(plan.sections) and "planned tonic" in str(error):
+                    try:
+                        fragment = _score_fragment_from_continuation(
+                            continuation,
+                            plan,
+                            motif_bank,
+                            adapter_dir,
+                            [section.start_measure, section.end_measure],
+                            allow_terminal_empty=True,
+                            require_terminal_tonic=False,
+                        )
+                    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                        pass
+                    else:
+                        repairable_fragments.append(
+                            (_fragment_quality_score(fragment) - 12, attempt, attempt_seed, fragment)
+                        )
                 fragment_failures.append({"attempt": attempt, "seed": attempt_seed, "reason": str(error)})
                 continue
             fragments.append((_fragment_quality_score(fragment), attempt, attempt_seed, fragment))
+        if not fragments and repairable_fragments:
+            fragments = repairable_fragments
+            cadence_repair_required = True
         if not fragments:
             raise ValueError(
                 f"Candidate {candidate_number} section {section.label} produced no valid alternatives: "
@@ -375,6 +397,7 @@ def _sample_hierarchical_score(
                 "quality_score": quality_score,
                 "valid_alternatives": len(fragments),
                 "failed_alternatives": fragment_failures,
+                "cadence_repair_required": cadence_repair_required and section_index == len(plan.sections),
             }
         )
         skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
@@ -412,6 +435,8 @@ def _sample_hierarchical_score(
             "generation_strategy": "hierarchical",
         },
     )
+    if cadence_repair_required:
+        _rewrite_final_tonic_cadence(score)
     score.metadata["trimmed_empty_trailing_measures"] = _trim_single_empty_trailing_measure(score)
     errors = validate_score(score)
     errors.extend(_validate_generated_whole_piece(score))
@@ -495,6 +520,7 @@ def _score_fragment_from_continuation(
     target_range: List[int],
     *,
     allow_terminal_empty: bool,
+    require_terminal_tonic: bool = True,
 ) -> PianoScoreIR:
     start_measure, end_measure = target_range
     finalized, decode_completion, skipped_optional_rows = _finalize_model_continuation(continuation, end_measure)
@@ -521,7 +547,7 @@ def _score_fragment_from_continuation(
     measure_note_counts = Counter(note.measure for note in score.notes)
     if measure_note_counts and max(measure_note_counts.values()) > 64:
         errors.append("Generated fragment exceeds the per-measure notation event budget")
-    if allow_terminal_empty and not _ending_fragment_has_tonic(score):
+    if allow_terminal_empty and require_terminal_tonic and not _ending_fragment_has_tonic(score):
         errors.append("Generated ending fragment does not end on the planned tonic")
     repetition = _measure_repetition_metrics(score)
     realized_measure_count = len(realized_measures)
@@ -549,6 +575,32 @@ def _ending_fragment_has_tonic(score: PianoScoreIR) -> bool:
         note.measure == final_measure and note.staff == 1 and note.pitch % 12 == tonic
         for note in score.notes
     )
+
+
+def _rewrite_final_tonic_cadence(score: PianoScoreIR) -> None:
+    """Replace one generated closing bar with an auditable tonic-chord repair."""
+
+    final_measure = max(note.measure for note in score.notes)
+    score.notes = [note for note in score.notes if note.measure != final_measure]
+    duration = score.plan.meter.quarter_beats
+    for pitch, staff in ((48, 2), (55, 2), (60, 2), (72, 1), (76, 1), (79, 1), (84, 1)):
+        score.notes.append(
+            NoteEvent(
+                id=f"cadence-repair-note-{len(score.notes) + 1}",
+                measure=final_measure,
+                beat=0.0,
+                duration=duration,
+                pitch=pitch,
+                staff=staff,
+                voice=1,
+            )
+        )
+    score.directions = [direction for direction in score.directions if direction.measure != final_measure]
+    score.metadata["cadence_repair"] = {
+        "applied": True,
+        "kind": "terminal-tonic-chord-rewrite",
+        "measure": final_measure,
+    }
 
 
 def _score_from_continuation(
