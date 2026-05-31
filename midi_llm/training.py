@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -12,7 +13,7 @@ DEFAULT_PHASES = [
     {
         "name": "score-dsl-autoencode",
         "objective": "Learn valid notation grammar and IR round trips",
-        "sample_scope": "complete scores and short spans",
+        "sample_scope": "16 measure notation grammar windows",
         "epochs": 1,
     },
     {
@@ -60,16 +61,21 @@ def create_run_plan(
         split: sum(row.get("split") == split for row in rows)
         for split in ("train", "valid", "test")
     }
+    quality_tier_counts = Counter(row.get("quality_tier", "unlabeled") for row in rows)
     curriculum = _summarize_curriculum(curriculum_examples)
     run_plan = {
         "pipeline": "score-first-piano-training-v1",
         "base_model": "slseanwu/MIDI-LLM_Llama-3.2-1B",
         "representation": "ScoreDSL 1.0",
-        "adaptation": "QLoRA first; expand ScoreDSL embeddings and LM head",
+        "adaptation": "QLoRA first with textual ScoreDSL tags in the upstream BPE vocabulary",
         "hardware": "single NVIDIA GPU with 48-80GB VRAM",
-        "dataset_policy": "PDMX no_license_conflict + all_valid solo-piano public-domain core",
+        "dataset_policy": (
+            "PDMX no_license_conflict + all_valid + best unique arrangement solo-piano core "
+            "with tiered quality task gates"
+        ),
         "manifest": str(manifest.resolve()),
         "split_counts": split_counts,
+        "quality_tier_counts": dict(sorted(quality_tier_counts.items())),
         "curriculum_examples": curriculum,
         "model_dataset": _read_optional_summary(model_dataset_summary),
         "phases": DEFAULT_PHASES,
@@ -99,14 +105,21 @@ def _summarize_curriculum(path: Optional[Path | str]) -> Dict[str, Any]:
     path = Path(path)
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     counts: Dict[str, int] = {}
+    quality_counts: Counter[str] = Counter()
+    quality_task_counts: Counter[str] = Counter()
     for row in rows:
         task = row["task"]
         counts[task] = counts.get(task, 0) + 1
+        quality_tier = row.get("quality_tier", "unlabeled")
+        quality_counts[quality_tier] += 1
+        quality_task_counts[f"{quality_tier}:{task}"] += 1
     return {
         "status": "prepared",
         "path": str(path.resolve()),
         "example_count": len(rows),
         "task_counts": dict(sorted(counts.items())),
+        "example_quality_tier_counts": dict(sorted(quality_counts.items())),
+        "quality_task_counts": dict(sorted(quality_task_counts.items())),
     }
 
 

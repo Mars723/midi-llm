@@ -66,6 +66,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
     rows = _selected_rows(dataset_dir, config.split, config.tasks)
     lengths = [_character_length(row) for row in rows]
     estimated_tokens = math.ceil(max(lengths, default=0) / 3)
+    materialization_summary = _read_json_if_exists(dataset_dir / "summary.json")
     spec = {
         "pipeline": "score-first-scoredsl-qlora-v1",
         "mode": "cloud-gpu-launch-spec",
@@ -77,6 +78,12 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "task_counts": _task_counts(rows),
             "max_characters": max(lengths, default=0),
             "estimated_max_tokens_at_three_characters_per_token": estimated_tokens,
+            "task_length_estimates": _task_length_estimates(rows),
+            "materialization": {
+                "examples_written": materialization_summary.get("examples_written"),
+                "examples_excluded_oversized": materialization_summary.get("examples_excluded_oversized"),
+                "max_example_characters": materialization_summary.get("max_example_characters"),
+            },
             "preflight_warning": (
                 f"Estimated sequence length {estimated_tokens} exceeds max_seq_length={config.max_seq_length}; "
                 "measure with the cloud tokenizer and raise the limit before training."
@@ -88,8 +95,10 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "base_model": config.base_model,
             "adapter": "QLoRA",
             "quantization": "4-bit NF4 with double quantization",
+            "attention_implementation": "sdpa",
             "lora_targets": list(DEFAULT_LORA_TARGETS),
-            "scoredsl_tokens_added": list(SCOREDLS_TOKENS),
+            "scoredsl_tag_strings": list(SCOREDLS_TOKENS),
+            "tokenizer_strategy": "reuse upstream BPE vocabulary; do not freeze randomly initialized added-token rows",
             "complete_piece_truncation_policy": "forbidden",
         },
         "runtime": {
@@ -136,9 +145,20 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("QLoRA launch requires an NVIDIA CUDA GPU; use --dry-run on local development machines")
     tokenizer = AutoTokenizer.from_pretrained(config.base_model, use_fast=True)
-    tokenizer.add_special_tokens({"additional_special_tokens": list(SCOREDLS_TOKENS)})
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer_preflight = _validate_token_lengths(rows, tokenizer, config.max_seq_length)
+    (Path(config.output_dir) / "tokenizer_preflight.json").write_text(
+        json.dumps(tokenizer_preflight, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if tokenizer_preflight["oversized_example_count"]:
+        raise ValueError(
+            f"{tokenizer_preflight['oversized_example_count']} selected examples exceed "
+            f"max_seq_length={config.max_seq_length}; largest example needs "
+            f"{tokenizer_preflight['maximum_tokens']} tokens. Adjust the materialization "
+            "character budget or raise the context length. Targets are never silently truncated."
+        )
     quantization = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -149,8 +169,8 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         config.base_model,
         device_map="auto",
         quantization_config=quantization,
+        attn_implementation="sdpa",
     )
-    model.resize_token_embeddings(len(tokenizer))
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model = get_peft_model(
@@ -193,6 +213,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         **spec,
         "mode": "trained-adapter",
         "adapter_dir": str(adapter_dir.resolve()),
+        "tokenizer_preflight": tokenizer_preflight,
     }
     (Path(config.output_dir) / "training_result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
@@ -249,8 +270,46 @@ def _collator(tokenizer, torch):
     return collate
 
 
+def _validate_token_lengths(rows, tokenizer, max_seq_length):
+    task_maximums: Dict[str, int] = {}
+    longest = []
+    for row in rows:
+        tokens = _token_length(row, tokenizer)
+        task_maximums[row["task"]] = max(task_maximums.get(row["task"], 0), tokens)
+        longest.append((tokens, row["example_id"], row["task"], row["target_scope"]))
+    longest.sort(reverse=True)
+    oversized = [item for item in longest if item[0] > max_seq_length]
+    result = {
+        "selected_examples": len(rows),
+        "max_seq_length": max_seq_length,
+        "maximum_tokens": longest[0][0] if longest else 0,
+        "task_maximum_tokens": dict(sorted(task_maximums.items())),
+        "oversized_example_count": len(oversized),
+        "oversized_examples": [
+            {
+                "tokens": tokens,
+                "example_id": example_id,
+                "task": task,
+                "target_scope": target_scope,
+            }
+            for tokens, example_id, task, target_scope in oversized[:20]
+        ],
+    }
+    return result
+
+
+def _token_length(row: Dict[str, Any], tokenizer) -> int:
+    prompt_ids = tokenizer(_model_prompt(row), add_special_tokens=False)["input_ids"]
+    target_ids = tokenizer(row["target_scoredsl"], add_special_tokens=False)["input_ids"]
+    return len(prompt_ids) + len(target_ids) + 1
+
+
 def _model_prompt(row: Dict[str, Any]) -> str:
-    payload = json.dumps(row["model_input"], ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return model_prompt(row["model_input"])
+
+
+def model_prompt(model_input: Dict[str, Any]) -> str:
+    payload = json.dumps(model_input, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return f"<SCORE_FIRST_INPUT>\n{payload}\n<SCORE_FIRST_TARGET>\n"
 
 
@@ -263,6 +322,20 @@ def _task_counts(rows: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     for row in rows:
         counts[row["task"]] = counts.get(row["task"], 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _task_length_estimates(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+    lengths: Dict[str, List[int]] = {}
+    for row in rows:
+        lengths.setdefault(row["task"], []).append(_character_length(row))
+    return {
+        task: {
+            "examples": len(values),
+            "max_characters": max(values),
+            "estimated_max_tokens_at_three_characters_per_token": math.ceil(max(values) / 3),
+        }
+        for task, values in sorted(lengths.items())
+    }
 
 
 def _launch_command(config: TrainConfig) -> str:
@@ -281,6 +354,10 @@ def _launch_command(config: TrainConfig) -> str:
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _read_json_if_exists(path: Path) -> Dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 def build_parser() -> argparse.ArgumentParser:

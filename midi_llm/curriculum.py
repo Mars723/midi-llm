@@ -13,6 +13,7 @@ import zipfile
 
 
 WINDOW_SIZES = (16, 32, 64)
+AUTOENCODE_WINDOW_SIZE = 16
 
 
 def prepare_curriculum(
@@ -35,6 +36,8 @@ def prepare_curriculum(
     examples: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, str]] = []
     task_counts: Counter[str] = Counter()
+    quality_tier_counts: Counter[str] = Counter()
+    quality_task_counts: Counter[str] = Counter()
 
     for row in rows:
         source = _resolve_source(root, row.get("path", ""))
@@ -49,9 +52,11 @@ def prepare_curriculum(
             )
             continue
         blueprints.append(blueprint)
+        quality_tier_counts[blueprint["quality_tier"]] += 1
         piece_examples = _examples_for_blueprint(blueprint)
         examples.extend(piece_examples)
         task_counts.update(example["task"] for example in piece_examples)
+        quality_task_counts.update(f"{example['quality_tier']}:{example['task']}" for example in piece_examples)
 
     _write_jsonl(output_dir / "piece_blueprints.jsonl", blueprints)
     _write_jsonl(output_dir / "curriculum_examples.jsonl", examples)
@@ -65,8 +70,11 @@ def prepare_curriculum(
         "unresolved_sources": len(unresolved),
         "examples_written": len(examples),
         "task_counts": dict(sorted(task_counts.items())),
+        "quality_tier_counts": dict(sorted(quality_tier_counts.items())),
+        "quality_task_counts": dict(sorted(quality_task_counts.items())),
         "invariants": {
             "whole_piece_examples_keep_complete_source": True,
+            "score_dsl_autoencode_window_size": AUTOENCODE_WINDOW_SIZE,
             "section_expand_window_sizes": list(WINDOW_SIZES),
             "section_expand_reads_global_blueprint": True,
             "section_expand_reads_neighbor_context": True,
@@ -105,6 +113,27 @@ def _build_blueprint(row: Dict[str, Any], source: Path) -> Optional[Dict[str, An
         "path": row.get("path", ""),
         "title": row.get("title", ""),
         "composer": row.get("composer", ""),
+        "genre": row.get("genre", "unclassified-piano"),
+        "genre_evidence": row.get("genre_evidence", {}),
+        "form": row.get("form", "free-sectional"),
+        "form_evidence": row.get("form_evidence", {}),
+        "difficulty": row.get("difficulty", "unknown"),
+        "difficulty_score": row.get("difficulty_score"),
+        "difficulty_evidence": row.get("difficulty_evidence", {}),
+        "quality_tier": row.get("quality_tier", "unlabeled"),
+        "quality_score": row.get("quality_score"),
+        "quality_evidence": row.get("quality_evidence", {}),
+        "tasks": row.get(
+            "tasks",
+            [
+                "score-dsl-autoencode",
+                "section-expand-16-64",
+                "whole-piece-generate",
+                "masked-span-inpaint",
+                "ending-complete",
+                "recapitulation-revise",
+            ],
+        ),
         **analysis,
         "sections": sections,
         "motif_references": {
@@ -122,36 +151,48 @@ def _build_blueprint(row: Dict[str, Any], source: Path) -> Optional[Dict[str, An
 def _examples_for_blueprint(blueprint: Dict[str, Any]) -> List[Dict[str, Any]]:
     count = blueprint["measure_count"]
     full_range = [1, count]
-    examples = [
-        _example(blueprint, "score-dsl-autoencode", full_range),
-        _example(blueprint, "whole-piece-generate", full_range),
-    ]
-    for size in WINDOW_SIZES:
-        if size <= count:
-            for start in _window_starts(count, size):
-                examples.append(
-                    _example(blueprint, "section-expand-16-64", [start, start + size - 1])
+    tasks = set(blueprint["tasks"])
+    examples = []
+    if "score-dsl-autoencode" in tasks:
+        for start in _window_starts(count, min(AUTOENCODE_WINDOW_SIZE, count)):
+            examples.append(
+                _example(
+                    blueprint,
+                    "score-dsl-autoencode",
+                    [start, min(count, start + AUTOENCODE_WINDOW_SIZE - 1)],
                 )
+            )
+    if "whole-piece-generate" in tasks:
+        examples.append(_example(blueprint, "whole-piece-generate", full_range))
+    if "section-expand-16-64" in tasks:
+        for size in WINDOW_SIZES:
+            if size <= count:
+                for start in _window_starts(count, size):
+                    examples.append(
+                        _example(blueprint, "section-expand-16-64", [start, start + size - 1])
+                    )
     repair_size = min(16, count)
     middle_start = max(1, (count - repair_size) // 2 + 1)
-    examples.extend(
-        [
+    if "masked-span-inpaint" in tasks:
+        examples.append(
             _example(
                 blueprint,
                 "masked-span-inpaint",
                 [middle_start, middle_start + repair_size - 1],
                 bidirectional=True,
-            ),
+            )
+        )
+    if "ending-complete" in tasks:
+        examples.append(
             _example(
                 blueprint,
                 "ending-complete",
                 [max(1, count - repair_size + 1), count],
                 bidirectional=False,
-            ),
-        ]
-    )
+            )
+        )
     recap = next((section for section in blueprint["sections"] if section["role"] == "return"), None)
-    if recap:
+    if recap and "recapitulation-revise" in tasks:
         examples.append(
             _example(
                 blueprint,
@@ -184,6 +225,7 @@ def _example(
         "example_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
         "work_id": blueprint["work_id"],
         "split": blueprint["split"],
+        "quality_tier": blueprint["quality_tier"],
         "path": blueprint["path"],
         "task": task,
         "target_range": [start, end],

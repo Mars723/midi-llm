@@ -38,6 +38,9 @@ def import_musicxml_score(
     title: Optional[str] = None,
     composer: Optional[str] = None,
     prompt: Optional[str] = None,
+    genre: Optional[str] = None,
+    form: Optional[str] = None,
+    difficulty: Optional[str] = None,
 ) -> PianoScoreIR:
     """Parse the supported notation subset from MusicXML or compressed MXL."""
 
@@ -65,14 +68,14 @@ def import_musicxml_score(
     plan = PiecePlanIR(
         title=score_title,
         prompt=prompt or _training_prompt(score_title, score_composer, key, meter),
-        genre="prelude",
-        form="free-sectional",
+        genre=genre or "unclassified-piano",
+        form=form or "free-sectional",
         duration_minutes=max(0.001, duration_minutes),
         measure_count=measure_count,
         key=key,
         meter=meter,
         tempo_bpm=initial_tempo,
-        difficulty="unknown",
+        difficulty=difficulty or "unknown",
         texture="imported-score",
         sections=sections,
         key_route=[key for _ in sections],
@@ -90,6 +93,11 @@ def import_musicxml_score(
             "source": "notation-first-musicxml",
             "source_path": str(path),
             "composer": score_composer,
+            "source_classification": {
+                "genre": genre or "unclassified-piano",
+                "form": form or "free-sectional",
+                "difficulty": difficulty or "unknown",
+            },
             "key_changes": parsed["key_changes"],
             "meter_changes": parsed["meter_changes"],
             "import_warnings": parsed["warnings"],

@@ -18,6 +18,8 @@ SUPPORTED_GENRES = (
     "minuet",
     "impromptu",
     "theme-and-variations",
+    "classical-piano",
+    "unclassified-piano",
 )
 
 SUPPORTED_FORMS = (

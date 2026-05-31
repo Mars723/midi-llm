@@ -1,46 +1,85 @@
 # Training Workflow
 
-## Public-Domain Core
+## PDMX Core
 
-Download PDMX separately and use its `no_license_conflict` and `all_valid`
-subsets. The repository does not download datasets automatically.
+Fetch PDMX from the official
+[Zenodo record 15571083](https://zenodo.org/records/15571083). The downloader
+resumes partial downloads and verifies the published MD5 checksums:
 
 ```bash
+python -m midi_llm.fetch_pdmx \
+  --output-dir training_resources/pdmx \
+  --extract-subsets
+
 python -m midi_llm.prepare_pdmx \
-  --metadata-csv /data/pdmx/PDMX.csv \
-  --output-dir training_manifests/pdmx
+  --metadata-csv training_resources/pdmx/PDMX.csv \
+  --output-dir training_manifests/pdmx-intermediate \
+  --difficulty intermediate \
+  --min-measures 48 \
+  --max-measures 192 \
+  --genres classical-piano,etude,nocturne,waltz,prelude,minuet,impromptu,theme-and-variations
+
+python -m midi_llm.fetch_pdmx \
+  --output-dir training_resources/pdmx \
+  --include-mxl \
+  --extract-mxl \
+  --mxl-manifest training_manifests/pdmx-intermediate/pdmx_score_first_manifest.jsonl
 
 python -m midi_llm.curriculum \
-  --manifest training_manifests/pdmx/pdmx_score_first_manifest.jsonl \
-  --dataset-root /data/pdmx \
-  --output-dir training_manifests/pdmx/curriculum
+  --manifest training_manifests/pdmx-intermediate/pdmx_score_first_manifest.jsonl \
+  --dataset-root training_resources/pdmx \
+  --output-dir training_manifests/pdmx-intermediate/curriculum
 
 python -m midi_llm.materialize_training \
-  --curriculum-dir training_manifests/pdmx/curriculum \
-  --dataset-root /data/pdmx \
-  --output-dir training_manifests/pdmx/model_dataset
+  --curriculum-dir training_manifests/pdmx-intermediate/curriculum \
+  --dataset-root training_resources/pdmx \
+  --output-dir training_manifests/pdmx-intermediate/model_dataset
 
 python -m midi_llm.training \
-  --manifest training_manifests/pdmx/pdmx_score_first_manifest.jsonl \
-  --curriculum-examples training_manifests/pdmx/curriculum/curriculum_examples.jsonl \
-  --model-dataset-summary training_manifests/pdmx/model_dataset/summary.json \
-  --output training_manifests/pdmx/run_plan.json
+  --manifest training_manifests/pdmx-intermediate/pdmx_score_first_manifest.jsonl \
+  --curriculum-examples training_manifests/pdmx-intermediate/curriculum/curriculum_examples.jsonl \
+  --model-dataset-summary training_manifests/pdmx-intermediate/model_dataset/summary.json \
+  --output training_manifests/pdmx-intermediate/run_plan.json
 
 python -m midi_llm.train_scoredsl \
-  --dataset-dir training_manifests/pdmx/model_dataset \
+  --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
   --output-dir training_runs/score_first_v1 \
   --dry-run
 ```
 
+The manifest uses PDMX's `no_license_conflict`, `all_valid`, and
+`is_best_unique_arrangement` fields before examples are emitted. Official PDMX
+encodes General MIDI programs in `tracks`; solo piano is `tracks == "0"`.
+Genre labels keep their matching field and phrase as evidence. Difficulty is
+auditable: `0.65 * note-density-percentile + 0.35 *
+normalized-source-complexity`, with `0.30 <= score < 0.75` retained as
+`intermediate`. The classical training command excludes `unclassified-piano`
+while retaining generic `classical-piano` works and the seven controlled
+classical piano genres. Form inference is deliberately conservative: title
+keywords identify rondos, variation genres map directly, nocturnes use an
+`ABA` heuristic, minuets use a ternary heuristic, and everything else stays
+`free-sectional`. The `metadata-curated` tier combines inferred target
+genre, source genre, composer, professional-user, rating, view, favorite, and
+best-path signals. The stricter `canonical-core` tier additionally requires a
+matched classical composer and rejects titles with explicit arrangement
+markers. Keep the broader labeled manifest for notation grammar experiments;
+the generated tier-aware curriculum uses broad scores for ScoreDSL grammar,
+`metadata-curated` scores for local expansion and repair, and `canonical-core`
+scores for complete-piece generation and recapitulation supervision.
+`no_license_conflict` follows PDMX's published metadata policy; review source
+rights separately before any commercial dataset release.
+
 The manifest is deduplicated by work and split before examples are emitted.
-Every accepted work receives local-window, whole-piece, masked-span,
-ending-completion, and recapitulation-revision tasks. The curriculum exporter
-reads MusicXML or compressed MXL files when available and writes:
+Task assignment follows the quality tiers above: every accepted work receives
+score autoencoding, while higher-confidence tiers progressively add local and
+whole-piece supervision. The curriculum exporter reads MusicXML or compressed
+MXL files when available and writes:
 
 - `piece_blueprints.jsonl`: complete-work metadata, heuristic section ranges,
   motif references, and the future cadence target.
-- `curriculum_examples.jsonl`: full-piece records plus `16`, `32`, and `64`
-  measure expansion windows with neighboring context and the shared blueprint.
+- `curriculum_examples.jsonl`: tier-gated full-piece records, `16` measure
+  ScoreDSL grammar windows, plus `16`, `32`, and `64` measure expansion
+  windows with neighboring context and the shared blueprint.
 - `unresolved_sources.jsonl`: manifest rows that still need a valid score path
   or a measure count before training examples can be emitted.
 
@@ -51,10 +90,16 @@ dynamics, pedal markings, wedges, articulations, fingering, ties, voices, and
 staves. Local targets remain fragments, but their model input includes the
 complete `PiecePlanIR`, the complete `MotifBank`, neighboring ScoreDSL
 fragments, the sparse whole-piece skeleton, and the future cadence target.
+The materializer rejects stale blueprints when the imported score length no
+longer matches the curriculum and writes those rows to
+`materialization_errors.jsonl`. It also writes `oversized_examples.jsonl` for
+examples above the default `175000` character preflight budget. These examples
+remain available as source scores but are excluded from the QLoRA dataset
+without truncation.
 
 ## Curriculum
 
-1. Learn valid `ScoreDSL` syntax with score autoencoding.
+1. Learn valid `ScoreDSL` syntax with `16` measure score autoencoding windows.
 2. Expand `16-64` measure sections while reading the complete `PiecePlanIR`,
    `MotifBank`, neighboring skeleton, and future ending target.
 3. Train complete `48-192` measure miniature generation.
@@ -62,9 +107,12 @@ fragments, the sparse whole-piece skeleton, and the future cadence target.
 5. Fine-tune ending completion against the explicit future cadence target.
 6. Revise recapitulation spans against the shared motif bank and both neighbors.
 
-Initialize from `slseanwu/MIDI-LLM_Llama-3.2-1B`, replace the incompatible
-Anticipation extension vocabulary with ScoreDSL embeddings, and begin with
-QLoRA on a single NVIDIA GPU with 48-80GB VRAM.
+Initialize from `slseanwu/MIDI-LLM_Llama-3.2-1B` and begin with QLoRA on a
+single NVIDIA GPU with 48-80GB VRAM. The first cloud run represents ScoreDSL
+tags with the upstream tokenizer's existing BPE vocabulary. This avoids
+freezing randomly initialized added-token rows during a lightweight QLoRA
+pilot. Treat dedicated ScoreDSL embedding and LM-head warm-up as a separate
+follow-up experiment.
 
 The current repository prepares deterministic training indexes, materialized
 ScoreDSL targets, and a decision-complete cloud run plan. It does not claim
@@ -82,7 +130,7 @@ Inspect the generated launch specification locally or on the cloud host:
 
 ```bash
 python -m midi_llm.train_scoredsl \
-  --dataset-dir training_manifests/pdmx/model_dataset \
+  --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
   --output-dir training_runs/score_first_v1 \
   --dry-run
 ```
@@ -92,17 +140,36 @@ have been reviewed:
 
 ```bash
 python -m midi_llm.train_scoredsl \
-  --dataset-dir training_manifests/pdmx/model_dataset \
+  --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
   --output-dir training_runs/score_first_v1 \
   --max-seq-length 65536 \
   --epochs 1
 ```
 
-The launcher uses 4-bit NF4 QLoRA, adds ScoreDSL semantic tokens, masks the
+The launcher uses 4-bit NF4 QLoRA with PyTorch SDPA attention, represents
+ScoreDSL semantic tags with the existing tokenizer vocabulary, masks the
 prompt portion of labels, and trains only against ScoreDSL targets. It refuses
-to silently truncate a complete piece when `max_seq_length` is too small. The
-dry-run character-based token estimate is an early warning only; the cloud
-launcher enforces the real token count after loading the selected tokenizer.
+to silently truncate any target when `max_seq_length` is too small. The
+dry-run character-based token estimate is an early warning only; before the
+cloud launcher loads the model, it tokenizes every selected example and
+rejects the launch if the real tokenizer count exceeds the context budget.
+
+Generate a complete score sample from a trained adapter:
+
+```bash
+python -m midi_llm.generate_checkpoint \
+  --adapter-dir training_runs/score_first_v1/adapter \
+  --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
+  --genre nocturne \
+  --form ABA \
+  --duration-minutes 3 \
+  --output-dir generated_score_first/checkpoint_sample_001
+```
+
+This path samples ScoreDSL notes from the adapter, rejects malformed candidates,
+keeps the requested whole-piece plan authoritative, and renders the selected
+complete score to the same Gallery artifacts as the local baseline. The
+performance overlay still uses the v1 rules renderer.
 
 ## Complete-Piece Release Gate
 

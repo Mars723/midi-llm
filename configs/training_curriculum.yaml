@@ -1,13 +1,14 @@
 pipeline: score-first-piano-training-v1
 dataset:
   core: PDMX
-  filters: [no_license_conflict, all_valid, solo_piano]
+  filters: [no_license_conflict, all_valid, best_unique_arrangement, solo_piano, intermediate, tiered-quality-policy, 48-192-measures]
+  genres: [classical-piano, etude, nocturne, waltz, prelude, minuet, impromptu, theme-and-variations]
   split_unit: normalized_work_id
 representation:
   score: ScoreDSL-1.0
   performance: PianoPerformanceIR-1.0
 curriculum:
-  - score-dsl-autoencode
+  - score-dsl-autoencode-16-measure-windows
   - section-expand-16-64-with-global-context
   - whole-piece-generate-48-192
   - masked-span-inpaint
@@ -18,5 +19,7 @@ hardware:
   training: single-NVIDIA-48-80GB
 trainer:
   adaptation: QLoRA-4bit-NF4
+  tokenizer_strategy: reuse-upstream-bpe-for-pilot
   max_seq_length: 65536
   complete_piece_truncation: forbidden
+  estimated_character_preflight_budget: 175000

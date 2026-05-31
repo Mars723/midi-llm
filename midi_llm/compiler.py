@@ -390,10 +390,23 @@ def _ticks(beats: float) -> int:
 
 
 def _run_musescore(binary: str, source: Path, target: Path) -> None:
-    subprocess.run(
-        [binary, "-F", "-o", str(target), str(source)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=120,
-    )
+    try:
+        subprocess.run(
+            [binary, "-F", "-o", str(target), str(source)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+    except subprocess.CalledProcessError:
+        # MuseScore 4.7.2 on macOS can abort after completing a CLI export.
+        if not _musescore_export_exists(target):
+            raise
+
+
+def _musescore_export_exists(target: Path) -> bool:
+    if target.exists() and target.stat().st_size:
+        return True
+    if target.suffix.lower() == ".png":
+        return any(page.stat().st_size for page in target.parent.glob(f"{target.stem}-*.png"))
+    return False

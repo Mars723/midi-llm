@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -12,18 +14,27 @@ from midi_llm.compiler import find_musescore, render_musescore, write_musicxml, 
 from midi_llm.compose import compose
 from midi_llm.curriculum import prepare_curriculum
 from midi_llm.evaluate import evaluate_score
+from midi_llm.fetch_pdmx import (
+    _extract_tar,
+    _missing_ranges,
+    _normalize_existing_parts,
+    _part_path,
+    _split_range,
+    _validate_coverage,
+)
 from midi_llm.gallery import write_gallery
+from midi_llm.generate_checkpoint import _score_from_continuation, _whole_piece_model_input
 from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.musicxml_score import import_musicxml_score
 from midi_llm.planner import ComposeControls, create_piece_plan
-from midi_llm.prepare_pdmx import prepare_manifest
+from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_manifest
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.scoredsl import decode_score, encode_score
 from midi_llm.score_ir import validate_score
 from midi_llm.training import create_run_plan
-from midi_llm.train_scoredsl import TrainConfig, build_training_spec
+from midi_llm.train_scoredsl import TrainConfig, _validate_token_lengths, build_training_spec
 
 
 class ScoreFirstTest(unittest.TestCase):
@@ -52,6 +63,21 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(decoded.motif_bank, score.motif_bank)
         self.assertEqual(decoded.notes, score.notes)
         self.assertEqual(decoded.directions, score.directions)
+
+    def test_checkpoint_continuation_uses_requested_whole_piece_plan(self):
+        score, _ = self.build_score()
+        model_input = _whole_piece_model_input(score.plan, score.motif_bank)
+        self.assertEqual(model_input["target_range"], [1, score.plan.measure_count])
+        self.assertEqual(model_input["future_ending_target"]["measure"], score.plan.measure_count)
+        decoded = _score_from_continuation(
+            encode_score(score) + "ignored trailing output",
+            score.plan,
+            score.motif_bank,
+            "training_runs/test/adapter",
+        )
+        self.assertEqual(decoded.plan, score.plan)
+        self.assertEqual(decoded.notes, score.notes)
+        self.assertEqual(decoded.metadata["score_source"], "trained-scoredsl-adapter")
 
     def test_performance_tempo_curve_does_not_leak_into_musicxml(self):
         score, performance = self.build_score()
@@ -172,6 +198,150 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(run_plan["representation"], "ScoreDSL 1.0")
             self.assertIn("whole-piece-generate", [phase["name"] for phase in run_plan["phases"]])
 
+    def test_official_pdmx_manifest_labels_intermediate_solo_piano(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            metadata = root / "PDMX.csv"
+            fieldnames = (
+                "mxl",
+                "title",
+                "composer_name",
+                "tracks",
+                "subset:all_valid",
+                "subset:no_license_conflict",
+                "is_best_unique_arrangement",
+                "best_unique_arrangement",
+                "complexity",
+                "notes_per_bar",
+                "n_notes",
+                "song_length.bars",
+                "genres",
+                "tags",
+            )
+            with metadata.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                for title, complexity, density, bars in (
+                    ("Simple Waltz", 0, 2, 64),
+                    ("Concert Etude", 1, 8, 80),
+                    ("Night Nocturne", 2, 14, 96),
+                    ("Grand Prelude", 3, 24, 120),
+                ):
+                    writer.writerow(
+                        {
+                            "mxl": f"./mxl/{title}.mxl",
+                            "title": title,
+                            "composer_name": "Composer",
+                            "tracks": "0",
+                            "subset:all_valid": "True",
+                            "subset:no_license_conflict": "True",
+                            "is_best_unique_arrangement": "True",
+                            "best_unique_arrangement": f"./data/{title}.json",
+                            "complexity": complexity,
+                            "notes_per_bar": density,
+                            "n_notes": density * bars,
+                            "song_length.bars": bars,
+                            "genres": "classical",
+                            "tags": "piano",
+                        }
+                    )
+                writer.writerow(
+                    {
+                        "mxl": "./mxl/Duet Waltz.mxl",
+                        "title": "Duet Waltz",
+                        "composer_name": "Composer",
+                        "tracks": "0-0",
+                        "subset:all_valid": "True",
+                        "subset:no_license_conflict": "True",
+                        "is_best_unique_arrangement": "True",
+                        "best_unique_arrangement": "./data/Duet Waltz.json",
+                        "complexity": 1,
+                        "notes_per_bar": 8,
+                        "n_notes": 640,
+                        "song_length.bars": 80,
+                        "genres": "classical",
+                        "tags": "piano duet",
+                    }
+                )
+            summary = prepare_manifest(
+                metadata,
+                root / "manifest",
+                difficulty="intermediate",
+                quality="metadata-curated",
+                min_measures=48,
+                max_measures=192,
+            )
+            self.assertEqual(summary["eligible_deduplicated_no_license_conflict_solo_piano_works"], 4)
+            self.assertEqual(summary["accepted_unique_solo_piano_works"], 2)
+            manifest = root / "manifest" / "pdmx_score_first_manifest.jsonl"
+            rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual({row["genre"] for row in rows}, {"etude", "nocturne"})
+            self.assertEqual({row["form"] for row in rows}, {"free-sectional", "ABA"})
+            self.assertTrue(all(row["difficulty"] == "intermediate" for row in rows))
+            self.assertTrue(all(row["quality_tier"] == "metadata-curated" for row in rows))
+            self.assertTrue(all(row["path"].startswith("./mxl/") for row in rows))
+            self.assertTrue(all(row["genre_evidence"]["field"] == "title" for row in rows))
+            self.assertTrue(all("whole-piece-generate" not in row["tasks"] for row in rows))
+
+    def test_pdmx_canonical_core_rejects_explicit_arrangements(self):
+        row = {
+            "title": "Minuet in D major",
+            "composer_name": "W. A. Mozart",
+            "genres": "classical",
+            "is_user_pro": "True",
+        }
+        tier, _, evidence = _quality_label(row, "minuet")
+        self.assertEqual(tier, "canonical-core")
+        self.assertTrue(evidence["canonical_classical_composer"])
+        self.assertIn("whole-piece-generate", _tasks_for_quality(tier))
+        arranged = {**row, "title": "Violin concerto arranged for solo piano"}
+        tier, _, evidence = _quality_label(arranged, "classical-piano")
+        self.assertNotEqual(tier, "canonical-core")
+        self.assertFalse(evidence["piano_native_title"])
+
+    def test_pdmx_fetch_selective_extract_rejects_escaping_members(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            archive = root / "mxl.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                for name in ("mxl/a.mxl", "mxl/b.mxl"):
+                    payload = name.encode("utf-8")
+                    member = tarfile.TarInfo(name)
+                    member.size = len(payload)
+                    handle.addfile(member, io.BytesIO(payload))
+            output = root / "output"
+            output.mkdir()
+            count = _extract_tar(archive, output, {"mxl/a.mxl"})
+            self.assertEqual(count, 1)
+            self.assertTrue((output / "mxl" / "a.mxl").exists())
+            self.assertFalse((output / "mxl" / "b.mxl").exists())
+
+            escaping = root / "escaping.tar.gz"
+            with tarfile.open(escaping, "w:gz") as handle:
+                payload = b"escape"
+                member = tarfile.TarInfo("../escape.txt")
+                member.size = len(payload)
+                handle.addfile(member, io.BytesIO(payload))
+            with self.assertRaises(ValueError):
+                _extract_tar(escaping, output)
+
+    def test_pdmx_parallel_resume_preserves_prefixes_and_fills_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            _part_path(root, 0, 99).write_bytes(b"a" * 40)
+            _part_path(root, 100, 199).write_bytes(b"b" * 50)
+            existing = _normalize_existing_parts(root, 0, 300)
+            gaps = _missing_ranges(0, 299, [(start, end) for start, end, _ in existing])
+            pending = [
+                (start, end, _part_path(root, start, end))
+                for gap_start, gap_end in gaps
+                for start, end in _split_range(gap_start, gap_end, 32)
+            ]
+            ranges = sorted(existing + pending)
+            _validate_coverage(ranges, 0, 300)
+            self.assertEqual([(start, end) for start, end, _ in existing], [(0, 39), (100, 149)])
+            self.assertEqual(gaps, [(40, 99), (150, 299)])
+
     def test_curriculum_keeps_full_piece_and_adds_contextual_windows(self):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
@@ -221,6 +391,45 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertTrue(all(row["context"]["future_ending_target"]["measure"] == 80 for row in windows))
             run_plan = create_run_plan(manifest, root / "run_plan.json", examples_path)
             self.assertEqual(run_plan["curriculum_examples"]["status"], "prepared")
+
+    def test_curriculum_respects_quality_task_gates(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "work_id": work_id,
+                            "split": "train",
+                            "path": f"{work_id}.mxl",
+                            "measure_count": 80,
+                            "quality_tier": tier,
+                            "tasks": _tasks_for_quality(tier),
+                        }
+                    )
+                    for work_id, tier in (("broad-work", "broad"), ("core-work", "canonical-core"))
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = prepare_curriculum(manifest, root / "curriculum", dataset_root=root)
+            examples = [
+                json.loads(line)
+                for line in (root / "curriculum" / "curriculum_examples.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            broad_tasks = {row["task"] for row in examples if row["work_id"] == "broad-work"}
+            core_tasks = {row["task"] for row in examples if row["work_id"] == "core-work"}
+            self.assertEqual(broad_tasks, {"score-dsl-autoencode"})
+            self.assertIn("whole-piece-generate", core_tasks)
+            self.assertEqual(summary["quality_tier_counts"], {"broad": 1, "canonical-core": 1})
+            run_plan = create_run_plan(
+                manifest,
+                root / "run_plan.json",
+                root / "curriculum" / "curriculum_examples.jsonl",
+            )
+            self.assertEqual(run_plan["quality_tier_counts"], {"broad": 1, "canonical-core": 1})
+            self.assertEqual(run_plan["curriculum_examples"]["quality_task_counts"]["broad:score-dsl-autoencode"], 3)
 
     def test_musicxml_score_import_preserves_professional_notation(self):
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -281,7 +490,9 @@ class ScoreFirstTest(unittest.TestCase):
             ]
             whole = next(row for row in rows if row["task"] == "whole-piece-generate")
             self.assertEqual(whole["target_range"], [1, 80])
-            self.assertEqual(decode_score(whole["target_scoredsl"]).plan.measure_count, 80)
+            decoded_whole = decode_score(whole["target_scoredsl"])
+            self.assertEqual(decoded_whole.plan.measure_count, 80)
+            self.assertEqual(decoded_whole.plan.genre, "unclassified-piano")
             local = next(
                 row
                 for row in rows
@@ -306,6 +517,108 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(spec["dataset"]["selected_examples"], 1)
             self.assertEqual(spec["model"]["complete_piece_truncation_policy"], "forbidden")
             self.assertTrue((root / "training_run" / "training_spec.json").exists())
+
+    def test_materializer_records_malformed_musicxml_without_aborting_batch(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            (root / "broken.musicxml").write_text("<score-partwise><broken>", encoding="utf-8")
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "broken-work",
+                        "split": "train",
+                        "path": "broken.musicxml",
+                        "measure_count": 48,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            curriculum = root / "curriculum"
+            prepare_curriculum(manifest, curriculum, dataset_root=root)
+            summary = materialize_training_dataset(curriculum, root / "dataset", dataset_root=root)
+            self.assertEqual(summary["source_scores_imported"], 0)
+            self.assertEqual(summary["source_scores_failed"], 1)
+            self.assertGreater(summary["examples_skipped"], 0)
+
+    def test_materializer_rejects_stale_blueprint_measure_count(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "stale-work",
+                        "split": "train",
+                        "path": "later.musicxml",
+                        "measure_count": 81,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            curriculum = root / "curriculum"
+            prepare_curriculum(manifest, curriculum, dataset_root=root)
+            (root / "later.musicxml").write_text(_notation_musicxml(), encoding="utf-8")
+            dataset = root / "dataset"
+            summary = materialize_training_dataset(curriculum, dataset, dataset_root=root)
+            self.assertEqual(summary["source_scores_imported"], 0)
+            self.assertEqual(summary["source_scores_failed"], 1)
+            errors = [
+                json.loads(line)
+                for line in (dataset / "materialization_errors.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("regenerate curriculum", errors[0]["reason"])
+
+    def test_materializer_excludes_oversized_target_without_truncation(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            (root / "notation.musicxml").write_text(_notation_musicxml(), encoding="utf-8")
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "oversized-work",
+                        "split": "train",
+                        "path": "notation.musicxml",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            curriculum = root / "curriculum"
+            prepare_curriculum(manifest, curriculum, dataset_root=root)
+            dataset = root / "dataset"
+            summary = materialize_training_dataset(
+                curriculum,
+                dataset,
+                dataset_root=root,
+                max_example_characters=1,
+            )
+            self.assertEqual(summary["examples_written"], 0)
+            self.assertGreater(summary["examples_excluded_oversized"], 0)
+            oversized = [
+                json.loads(line)
+                for line in (dataset / "oversized_examples.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(all("without truncation" in row["reason"] for row in oversized))
+
+    def test_tokenizer_preflight_reports_oversized_target_before_training(self):
+        class CharacterTokenizer:
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": list(text)}
+
+        row = {
+            "example_id": "too-long",
+            "task": "whole-piece-generate",
+            "target_scope": "complete-piece",
+            "model_input": {"instruction": "Generate score."},
+            "target_scoredsl": "END_SCORE\n",
+        }
+        result = _validate_token_lengths([row], CharacterTokenizer(), max_seq_length=1)
+        self.assertEqual(result["oversized_example_count"], 1)
+        self.assertGreater(result["maximum_tokens"], 1)
 
     def test_release_gate_dry_run_writes_review_artifacts(self):
         with tempfile.TemporaryDirectory() as raw_dir:

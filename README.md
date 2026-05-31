@@ -49,7 +49,7 @@ python -m midi_llm.musicxml_score \
 ```
 
 See [`docs/SCORE_FIRST.md`](docs/SCORE_FIRST.md) for the artifact contract and
-[`docs/TRAINING.md`](docs/TRAINING.md) for the public-domain PDMX curriculum.
+[`docs/TRAINING.md`](docs/TRAINING.md) for the no-license-conflict PDMX curriculum.
 The original inference scripts below remain available as the baseline.
 
 Validate the cloud QLoRA launch specification locally after materializing the
@@ -57,10 +57,14 @@ PDMX model dataset:
 
 ```bash
 python -m midi_llm.train_scoredsl \
-  --dataset-dir training_manifests/pdmx/model_dataset \
+  --dataset-dir training_manifests/pdmx-intermediate/model_dataset \
   --output-dir training_runs/score_first_v1 \
   --dry-run
 ```
+
+After training, generate a real adapter-backed complete-piece sample with
+`python -m midi_llm.generate_checkpoint`. See
+[`docs/TRAINING.md`](docs/TRAINING.md) for the full command.
 
 Generate the 50-piece v1 review set after local smoke testing:
 

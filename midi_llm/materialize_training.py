@@ -8,16 +8,22 @@ from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Sequence
+import xml.etree.ElementTree as ET
 
 from .musicxml_score import import_musicxml_score
 from .scoredsl import encode_score
 from .score_ir import PianoScoreIR, validate_score, write_json
+from .train_scoredsl import model_prompt
+
+
+DEFAULT_MAX_EXAMPLE_CHARACTERS = 175_000
 
 
 def materialize_training_dataset(
     curriculum_dir: Path | str,
     output_dir: Path | str,
     dataset_root: Optional[Path | str] = None,
+    max_example_characters: Optional[int] = DEFAULT_MAX_EXAMPLE_CHARACTERS,
 ) -> Dict[str, Any]:
     """Import source scores and emit structured inputs paired with ScoreDSL targets."""
 
@@ -42,11 +48,19 @@ def materialize_training_dataset(
                 source,
                 title=blueprint.get("title") or None,
                 composer=blueprint.get("composer") or None,
+                genre=blueprint.get("genre") or None,
+                form=blueprint.get("form") or None,
+                difficulty=blueprint.get("difficulty") or None,
             )
             validation_errors = validate_score(score)
             if validation_errors:
                 raise ValueError("; ".join(validation_errors))
-        except (OSError, ValueError) as error:
+            if blueprint["measure_count"] != score.plan.measure_count:
+                raise ValueError(
+                    f"Blueprint measure count {blueprint['measure_count']} does not match imported score "
+                    f"{score.plan.measure_count}; regenerate curriculum from the available score sources"
+                )
+        except (OSError, ValueError, ET.ParseError) as error:
             errors.append({"work_id": work_id, "path": str(source), "reason": str(error)})
             continue
         scores[work_id] = score
@@ -57,21 +71,42 @@ def materialize_training_dataset(
 
     split_rows: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
     task_counts: Counter[str] = Counter()
+    quality_tier_counts: Counter[str] = Counter()
     marking_counts: Counter[str] = Counter()
     skipped_examples = 0
+    oversized_examples: List[Dict[str, Any]] = []
     for example in examples:
         score = scores.get(example["work_id"])
         if score is None:
             skipped_examples += 1
             continue
         row = _materialize_example(score, example)
+        character_length = _example_character_length(row)
+        if max_example_characters is not None and character_length > max_example_characters:
+            oversized_examples.append(
+                {
+                    "example_id": row["example_id"],
+                    "work_id": row["work_id"],
+                    "split": row["split"],
+                    "task": row["task"],
+                    "quality_tier": row["quality_tier"],
+                    "target_scope": row["target_scope"],
+                    "target_range": row["target_range"],
+                    "character_length": character_length,
+                    "max_example_characters": max_example_characters,
+                    "reason": "estimated context budget exceeded; target was excluded without truncation",
+                }
+            )
+            continue
         split_rows[example["split"]].append(row)
         task_counts[row["task"]] += 1
+        quality_tier_counts[row["quality_tier"]] += 1
     for score in scores.values():
         marking_counts.update(score.plan.markings)
     for split in ("train", "valid", "test"):
         _write_jsonl(output_dir / f"{split}.jsonl", split_rows[split])
     _write_jsonl(output_dir / "materialization_errors.jsonl", errors)
+    _write_jsonl(output_dir / "oversized_examples.jsonl", oversized_examples)
     summary = {
         "pipeline": "score-first-model-dataset-v1",
         "curriculum_dir": str(curriculum_dir.resolve()),
@@ -80,12 +115,17 @@ def materialize_training_dataset(
         "source_scores_failed": len(errors),
         "examples_written": sum(len(rows) for rows in split_rows.values()),
         "examples_skipped": skipped_examples,
+        "examples_excluded_oversized": len(oversized_examples),
+        "max_example_characters": max_example_characters,
+        "oversized_task_counts": dict(sorted(Counter(row["task"] for row in oversized_examples).items())),
         "split_counts": {split: len(split_rows[split]) for split in ("train", "valid", "test")},
         "task_counts": dict(sorted(task_counts.items())),
+        "example_quality_tier_counts": dict(sorted(quality_tier_counts.items())),
         "score_marking_counts": dict(sorted(marking_counts.items())),
         "invariants": {
             "targets_are_scoredsl": True,
             "complete_piece_targets_are_not_truncated": True,
+            "oversized_targets_are_excluded_without_truncation": True,
             "local_targets_read_complete_piece_plan": True,
             "local_targets_read_complete_motif_bank": True,
             "local_targets_read_neighbor_fragments": True,
@@ -97,6 +137,7 @@ def materialize_training_dataset(
             "valid": "valid.jsonl",
             "test": "test.jsonl",
             "errors": "materialization_errors.jsonl",
+            "oversized_examples": "oversized_examples.jsonl",
         },
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -114,6 +155,7 @@ def _materialize_example(score: PianoScoreIR, example: Dict[str, Any]) -> Dict[s
         "work_id": example["work_id"],
         "split": example["split"],
         "task": example["task"],
+        "quality_tier": example.get("quality_tier", "unlabeled"),
         "prompt": score.plan.prompt,
         "target_scope": "complete-piece" if whole_piece else "fragment",
         "target_range": [start, end],
@@ -169,6 +211,10 @@ def _instruction(task: str) -> str:
     }.get(task, f"Complete the notation-first score task: {task}.")
 
 
+def _example_character_length(row: Dict[str, Any]) -> int:
+    return len(model_prompt(row["model_input"])) + len(row["target_scoredsl"])
+
+
 def _resolve_source(root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else root / path
@@ -193,8 +239,14 @@ def main() -> None:
     parser.add_argument("--curriculum-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--dataset-root")
+    parser.add_argument("--max-example-characters", type=int, default=DEFAULT_MAX_EXAMPLE_CHARACTERS)
     args = parser.parse_args()
-    summary = materialize_training_dataset(args.curriculum_dir, args.output_dir, args.dataset_root)
+    summary = materialize_training_dataset(
+        args.curriculum_dir,
+        args.output_dir,
+        args.dataset_root,
+        max_example_characters=args.max_example_characters or None,
+    )
     print(json.dumps(summary, indent=2))
     raise SystemExit(0 if not summary["source_scores_failed"] else 1)
 
