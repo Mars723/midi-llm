@@ -9,6 +9,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from midi_llm.compiler import find_musescore, render_musescore, write_musicxml, write_performance_midi
@@ -1109,6 +1110,7 @@ class ScoreFirstTest(unittest.TestCase):
             )
             self.assertEqual(summary["generated_piece_count"], 2)
             self.assertEqual(summary["rates"]["tempo_overlay_leakage_count"], 0)
+            self.assertEqual(summary["rates"]["two_staff_texture_rate"], 1.0)
             self.assertFalse(summary["checks"]["piece_count"])
             self.assertFalse(summary["checks"]["musescore_render_rate"])
             self.assertFalse(summary["release_ready"])
@@ -1117,6 +1119,26 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertTrue((root / "human_review.csv").exists())
             self.assertTrue((root / "release_gate.json").exists())
             self.assertIn("piece_001/gallery.html", (root / "review_gallery.html").read_text(encoding="utf-8"))
+
+    def test_release_gate_can_route_generation_through_checkpoint_adapter(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            captured = []
+
+            def generate(args):
+                captured.append(args)
+                compose(args)
+
+            with patch("midi_llm.release_gate.generate_from_checkpoint", side_effect=generate):
+                run_release_gate(
+                    raw_dir,
+                    piece_count=1,
+                    candidates=1,
+                    skip_musescore=True,
+                    adapter_dir="training_runs/test/adapter",
+                    section_candidates=3,
+                )
+            self.assertEqual(captured[0].adapter_dir, "training_runs/test/adapter")
+            self.assertEqual(captured[0].section_candidates, 3)
 
     @unittest.skipUnless(find_musescore(), "MuseScore is not installed")
     def test_musescore_exports_pdf_and_png(self):

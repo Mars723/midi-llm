@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Sequence
 import xml.etree.ElementTree as ET
 
 from .compose import compose
+from .generate_checkpoint import generate_from_checkpoint
 from .score_ir import read_score
 
 
@@ -53,6 +54,9 @@ def run_release_gate(
     seed: int = 2300,
     skip_musescore: bool = False,
     include_sonata: bool = False,
+    adapter_dir: str | None = None,
+    base_model: str = "slseanwu/MIDI-LLM_Llama-3.2-1B",
+    section_candidates: int = 2,
 ) -> Dict[str, Any]:
     """Run full-piece generation and write an auditable release-gate report."""
 
@@ -71,6 +75,9 @@ def run_release_gate(
                 seed=seed + index * 17,
                 skip_musescore=skip_musescore,
                 experimental=False,
+                adapter_dir=adapter_dir,
+                base_model=base_model,
+                section_candidates=section_candidates,
             )
         )
     experimental_rows = []
@@ -83,6 +90,9 @@ def run_release_gate(
                 seed=seed + 100_000,
                 skip_musescore=skip_musescore,
                 experimental=True,
+                adapter_dir=adapter_dir,
+                base_model=base_model,
+                section_candidates=section_candidates,
             )
         )
     _write_csv(output_dir / "automatic_results.csv", rows)
@@ -139,6 +149,7 @@ def write_review_gallery(
     <section class="summary">
       <div class="pill"><strong>Valid pieces</strong><br>{rates["valid_piece_rate"]:.0%}</div>
       <div class="pill"><strong>MuseScore render</strong><br>{rates["musescore_render_rate"]:.0%}</div>
+      <div class="pill"><strong>Two-staff texture</strong><br>{rates["two_staff_texture_rate"]:.0%}</div>
       <div class="pill"><strong>Tempo overlay leaks</strong><br>{rates["tempo_overlay_leakage_count"]}</div>
       <div class="pill"><strong>Human review</strong><br><a href="human_review.csv">human_review.csv</a></div>
     </section>
@@ -177,6 +188,9 @@ def _run_profile(
     seed: int,
     skip_musescore: bool,
     experimental: bool,
+    adapter_dir: str | None,
+    base_model: str,
+    section_candidates: int,
 ) -> Dict[str, Any]:
     args = argparse.Namespace(
         prompt=profile.prompt,
@@ -199,7 +213,22 @@ def _run_profile(
         skip_musescore=skip_musescore,
         musescore_bin=None,
     )
-    compose(args)
+    if adapter_dir:
+        generate_from_checkpoint(
+            argparse.Namespace(
+                **vars(args),
+                adapter_dir=adapter_dir,
+                base_model=base_model,
+                temperature=0.9,
+                top_p=0.95,
+                repetition_penalty=1.05,
+                section_candidates=section_candidates,
+                resume_score_ir=None,
+                max_new_tokens=65536,
+            )
+        )
+    else:
+        compose(args)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     metrics = manifest["metrics"]
     score = read_score(output_dir / "score.ir.json")
@@ -230,6 +259,8 @@ def _run_profile(
         "sections_cover_piece": metrics["sections_cover_piece"],
         "has_final_tonic": metrics["has_final_tonic"],
         "tempo_overlay_isolated": metrics["tempo_overlay_isolated"],
+        "two_staff_texture_acceptable": metrics["two_staff_texture_acceptable"],
+        "lower_staff_measure_coverage": metrics["lower_staff_measure_coverage"],
         "xml_parse_ok": xml_parse_ok,
         "musescore_render_ok": musescore_render_ok,
         "controls_match": controls_match,
@@ -254,6 +285,7 @@ def _summarize(
         "musicxml_parse_rate": rate("xml_parse_ok"),
         "musescore_render_rate": rate("musescore_render_ok"),
         "control_accuracy_rate": rate("controls_match"),
+        "two_staff_texture_rate": rate("two_staff_texture_acceptable"),
         "tempo_overlay_leakage_count": sum(not row["tempo_overlay_isolated"] for row in rows),
     }
     thresholds = {
@@ -265,6 +297,7 @@ def _summarize(
         "musicxml_parse_rate_min": 0.98,
         "musescore_render_rate_min": 0.95,
         "control_accuracy_rate_min": 0.90,
+        "two_staff_texture_rate_min": 1.0,
         "tempo_overlay_leakage_count_max": 0,
     }
     checks = {
@@ -277,6 +310,7 @@ def _summarize(
         "musicxml_parse_rate": rates["musicxml_parse_rate"] >= thresholds["musicxml_parse_rate_min"],
         "musescore_render_rate": rates["musescore_render_rate"] >= thresholds["musescore_render_rate_min"],
         "control_accuracy_rate": rates["control_accuracy_rate"] >= thresholds["control_accuracy_rate_min"],
+        "two_staff_texture_rate": rates["two_staff_texture_rate"] >= thresholds["two_staff_texture_rate_min"],
         "tempo_overlay_isolation": rates["tempo_overlay_leakage_count"]
         <= thresholds["tempo_overlay_leakage_count_max"],
     }
@@ -355,6 +389,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2300)
     parser.add_argument("--skip-musescore", action="store_true", help="Dry-run only; cannot pass the release gate")
     parser.add_argument("--include-sonata", action="store_true", help="Report one non-blocking sonata-allegro sample")
+    parser.add_argument("--adapter-dir", help="Evaluate checkpoint generation instead of the rules baseline")
+    parser.add_argument("--base-model", default="slseanwu/MIDI-LLM_Llama-3.2-1B")
+    parser.add_argument("--section-candidates", type=int, default=2)
     args = parser.parse_args()
     summary = run_release_gate(
         output_dir=args.output_dir,
@@ -363,6 +400,9 @@ def main() -> None:
         seed=args.seed,
         skip_musescore=args.skip_musescore,
         include_sonata=args.include_sonata,
+        adapter_dir=args.adapter_dir,
+        base_model=args.base_model,
+        section_candidates=args.section_candidates,
     )
     print(json.dumps(summary, indent=2))
     raise SystemExit(0 if summary["automated_gate_passed"] else 1)

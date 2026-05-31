@@ -315,8 +315,10 @@ for a release run:
 ```bash
 python -m midi_llm.release_gate \
   --output-dir generated_score_first/release_gate_v1 \
+  --adapter-dir training_runs/score_first_intermediate_v2/09_two_staff_refinement/adapter \
   --pieces 50 \
   --candidates 4 \
+  --section-candidates 2 \
   --include-sonata
 ```
 
@@ -328,7 +330,8 @@ MusicXML parsing, MuseScore PDF/PNG export, control accuracy, and
 expressive-tempo isolation. Accompaniment textures must also cover both
 piano staves across the piece. The human worksheet keeps the required 50-piece
 musical review explicit. `sonata-allegro` is reported separately and does not
-block v1.
+block v1. Omit `--adapter-dir` only when running the deterministic rules
+baseline for comparison.
 
 ## Performance Layer
 
