@@ -36,6 +36,24 @@ dependencies, and writes a remote dry-run specification.
 
 ## Run
 
+Run the upstream-native parity gate before additional ScoreDSL training. This
+uses the original checkpoint, prompt framing, MIDI BOS token, and Anticipation
+MIDI representation. The resulting `native.mid` files are the authoritative
+musical-content candidates:
+
+```bash
+export MIDI_LLM_NATIVE_OUTPUT_ROOT=/workspace/midllm-backups/generated_native_backbone
+export MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod/score-first-intermediate-v2'
+bash scripts/run_native_backbone_pilot.sh
+```
+
+Inspect the native MIDI candidates against the upstream Live Demo before
+training a notation editor. Converted score galleries are draft-only previews.
+See [`ARCHITECTURE_CORRECTION.md`](ARCHITECTURE_CORRECTION.md).
+
+The direct ScoreDSL adapter commands below remain available for research
+comparison. They are not the default quality path.
+
 Run the one-step real-sample check before the longer pilot:
 
 ```bash

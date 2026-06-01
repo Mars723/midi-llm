@@ -1,5 +1,12 @@
 # Training Workflow
 
+> **Architecture note:** Direct ScoreDSL QLoRA is an experimental comparison
+> path. Production-quality work must first pass the upstream-native
+> Anticipation MIDI parity gate described in
+> [`ARCHITECTURE_CORRECTION.md`](ARCHITECTURE_CORRECTION.md). Future notation
+> training should act as a constrained editor over selected native MIDI
+> content, not replace the upstream composition prior.
+
 ## PDMX Core
 
 Fetch PDMX from the official

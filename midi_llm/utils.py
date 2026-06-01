@@ -13,6 +13,11 @@ from typing import List, Optional, Union
 
 import torch
 
+from .native_tokens import (
+    AMT_GPT2_BOS_ID,
+    LLAMA_VOCAB_SIZE,
+)
+
 # Core dependency - required
 try:
     from anticipation.convert import events_to_midi
@@ -45,8 +50,6 @@ except ImportError:
 # Constants
 # ============================================================================
 
-AMT_GPT2_BOS_ID = 55026
-LLAMA_VOCAB_SIZE = 128256
 LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B"
 
 # MIDI tokens are in the extended vocabulary range
@@ -245,4 +248,3 @@ def save_generation(
     except Exception as e:
         print(f"  ✗ Error saving generation {generation_idx}: {e}")
         return False
-

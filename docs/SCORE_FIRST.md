@@ -2,6 +2,27 @@
 
 The score-first path keeps notation and performance timing separate.
 
+## Native Musical-Content Backbone
+
+The production quality path begins with the unmodified upstream
+`slseanwu/MIDI-LLM_Llama-3.2-1B` checkpoint and its native Anticipation MIDI
+tokens:
+
+```bash
+python -m midi_llm.native_backbone \
+  --prompt "A lyrical intermediate solo piano nocturne with a tense middle section and a calm return." \
+  --output-dir generated_native_backbone/nocturne_parity
+```
+
+Each `candidate_<n>/native.mid` is an authoritative musical-content artifact.
+Each converted `candidate_<n>/score_draft/` is explicitly draft-only. Engraving
+and notation enhancement must preserve the selected native content unless an
+editor records a deliberate revision.
+
+The original direct ScoreDSL adapter experiment is retained for comparison but
+is not the production composition route. See
+[`ARCHITECTURE_CORRECTION.md`](ARCHITECTURE_CORRECTION.md).
+
 ## Whole-Piece Generation
 
 `16-64` measures is a local training window, not an output limit. A generated
@@ -62,13 +83,11 @@ This path preserves score-level notation such as tempo, dynamics, pedal
 markings, wedges, articulations, fingering, ties, voices, and staves in
 `PianoScoreIR` and `ScoreDSL`.
 
-Training and checkpoint generation use a separate compact `ModelScoreDSL v3`
-stream. Its fixed-column `SCORE`, `MEASURE`, `NOTE`, `DIRECTION`, `LAYOUT`,
-and `END_SCORE` lines avoid repeating the shared `PiecePlanIR` and `MotifBank`.
-Each `MEASURE` block emits score directions before notes so dynamics, pedal,
-wedges, and structural tempo markings are learned before the whole-piece
-boundary stop.
-The rich `score.dsl` artifact remains the exported notation representation.
+The experimental direct ScoreDSL adapter uses a separate compact `ModelScoreDSL
+v3` stream. Its fixed-column `SCORE`, `MEASURE`, `NOTE`, `DIRECTION`, `LAYOUT`,
+and `END_SCORE` lines remain useful for constrained notation editing research.
+They do not replace the native MIDI backbone. The rich `score.dsl` artifact
+remains the exported notation representation.
 
 ## Release Gate
 

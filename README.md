@@ -20,7 +20,22 @@ miniatures. It keeps notation separate from expressive performance timing:
 - `PiecePlanIR` and `MotifBank` describe the complete work before section
   expansion. `16-64` measures is a local training window, not an output limit.
 
-Generate and inspect a complete 2-6 minute piece:
+The quality path starts from the upstream model's native Anticipation MIDI
+generation. Preserve that native MIDI as the musical-content backbone, then
+convert it to an explicitly labeled draft score:
+
+```bash
+python -m midi_llm.native_backbone \
+  --prompt "A lyrical intermediate solo piano nocturne with a tense middle section and a calm return." \
+  --output-dir generated_native_backbone/nocturne_parity
+```
+
+See [`docs/ARCHITECTURE_CORRECTION.md`](docs/ARCHITECTURE_CORRECTION.md). The
+direct ScoreDSL composition path below remains an experimental contract and
+research baseline. It is not a demonstrated quality successor to upstream
+MIDI-LLM.
+
+Generate and inspect a deterministic score-contract baseline:
 
 ```bash
 python -m midi_llm.compose \
@@ -62,9 +77,10 @@ python -m midi_llm.train_scoredsl \
   --dry-run
 ```
 
-After training, generate a real adapter-backed complete-piece sample with
-`python -m midi_llm.generate_checkpoint`. See
-[`docs/TRAINING.md`](docs/TRAINING.md) for the full command.
+After experimental ScoreDSL training, `python -m midi_llm.generate_checkpoint`
+generates an adapter-backed research sample. It must not replace the upstream
+native MIDI parity gate. See [`docs/TRAINING.md`](docs/TRAINING.md) for the full
+command.
 
 Generate the 50-piece v1 review set after local smoke testing:
 

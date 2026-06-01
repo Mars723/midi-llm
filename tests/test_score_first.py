@@ -46,6 +46,12 @@ from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structura
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from midi_llm.musicxml_score import import_musicxml_score
+from midi_llm.native_backbone import NativeBackboneConfig, native_backbone_manifest, upstream_generation_prompt
+from midi_llm.native_tokens import (
+    LLAMA_VOCAB_SIZE,
+    NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
+    normalize_native_model_tokens,
+)
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
@@ -76,6 +82,40 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(score.plan.sections[0].start_measure, 1)
         self.assertEqual(score.plan.sections[-1].end_measure, score.plan.measure_count)
         self.assertEqual(validate_score(score), [])
+
+    def test_native_backbone_matches_upstream_prompt_framing(self):
+        self.assertEqual(
+            upstream_generation_prompt("A solo piano nocturne."),
+            "You are a world-class composer. Please compose some music according to the following description: "
+            "A solo piano nocturne. ",
+        )
+        self.assertEqual(NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 55_026)
+
+    def test_native_backbone_normalizes_only_complete_anticipation_events(self):
+        tokens, report = normalize_native_model_tokens(
+            [
+                LLAMA_VOCAB_SIZE + 1,
+                LLAMA_VOCAB_SIZE + 2,
+                LLAMA_VOCAB_SIZE + 3,
+                LLAMA_VOCAB_SIZE + 4,
+                LLAMA_VOCAB_SIZE + 5,
+                128_009,
+            ]
+        )
+        self.assertEqual(tokens, [1, 2, 3])
+        self.assertEqual(report["dropped_incomplete_event_tokens"], 2)
+        self.assertEqual(report["stop_model_token_id"], 128_009)
+
+    def test_native_backbone_manifest_keeps_native_midi_authoritative(self):
+        config = NativeBackboneConfig(prompt="A solo piano nocturne.", output_dir="generated_native_backbone/test")
+        manifest = native_backbone_manifest(
+            config,
+            [{"candidate": 1, "native_midi": "candidate_1/native.mid"}],
+            [],
+        )
+        self.assertEqual(manifest["adapter"], None)
+        self.assertTrue(manifest["native_midi_is_authoritative_musical_content"])
+        self.assertTrue(manifest["score_conversion_is_draft_only"])
 
     def test_scoredsl_round_trip(self):
         score, _ = self.build_score()
