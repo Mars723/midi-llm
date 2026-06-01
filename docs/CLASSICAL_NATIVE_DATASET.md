@@ -64,9 +64,12 @@ python -m midi_llm.materialize_native_training \
   --output-dir training_manifests/pdmx-classical-core/native_tokens
 ```
 
-The materializer never truncates an oversized complete work. It records the
-work separately so a later curriculum builder can create local windows while
-retaining the whole-piece source.
+The materializer never truncates an oversized complete work. Anticipation uses
+segment-local absolute time tokens with an approximately 100-second vocabulary
+range, so long pieces are covered by rebased native time windows while the
+complete source MIDI and work-level controls remain intact. A segment that
+still exceeds an explicitly configured context budget is recorded separately
+instead of being truncated.
 
 ## Supplemental Source
 

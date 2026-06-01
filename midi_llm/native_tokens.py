@@ -9,18 +9,53 @@ AMT_GPT2_BOS_ID = 55_026
 LLAMA_VOCAB_SIZE = 128_256
 NATIVE_MIDI_BOS_MODEL_TOKEN_ID = LLAMA_VOCAB_SIZE + AMT_GPT2_BOS_ID
 ALLOWED_NATIVE_MODEL_TOKEN_IDS = range(LLAMA_VOCAB_SIZE, NATIVE_MIDI_BOS_MODEL_TOKEN_ID)
+NATIVE_TIME_TOKEN_MIN = 0
+NATIVE_TIME_TOKEN_MAX_EXCLUSIVE = 10_000
+NATIVE_DURATION_TOKEN_MIN = 10_000
+NATIVE_DURATION_TOKEN_MAX_EXCLUSIVE = 11_000
+NATIVE_NOTE_TOKEN_MIN = 11_000
+NATIVE_NOTE_TOKEN_MAX_EXCLUSIVE = 27_512
 
 
 def native_event_tokens_to_model_tokens(event_tokens: Iterable[int], *, include_bos: bool = True) -> List[int]:
     """Shift Anticipation event IDs into the MIDI-LLM extended vocabulary."""
 
     normalized = [int(token_id) for token_id in event_tokens]
-    if len(normalized) % 3:
-        raise ValueError("Native Anticipation event sequence must contain complete triples")
-    if any(not 0 <= token_id < AMT_GPT2_BOS_ID for token_id in normalized):
-        raise ValueError("Native Anticipation event token falls outside the upstream vocabulary")
+    validate_native_event_tokens(normalized)
     prefix = [NATIVE_MIDI_BOS_MODEL_TOKEN_ID] if include_bos else []
     return prefix + [LLAMA_VOCAB_SIZE + token_id for token_id in normalized]
+
+
+def validate_native_event_tokens(event_tokens: Iterable[int], *, allow_absolute_time_overflow: bool = False) -> None:
+    """Validate Anticipation time, duration, and note token triples."""
+
+    tokens = [int(token_id) for token_id in event_tokens]
+    if len(tokens) % 3:
+        raise ValueError("Native Anticipation event sequence must contain complete triples")
+    max_time = None if allow_absolute_time_overflow else NATIVE_TIME_TOKEN_MAX_EXCLUSIVE
+    if any(token_id < NATIVE_TIME_TOKEN_MIN or (max_time is not None and token_id >= max_time) for token_id in tokens[0::3]):
+        raise ValueError("Native Anticipation time token falls outside the upstream vocabulary")
+    if any(not NATIVE_DURATION_TOKEN_MIN <= token_id < NATIVE_DURATION_TOKEN_MAX_EXCLUSIVE for token_id in tokens[1::3]):
+        raise ValueError("Native Anticipation duration token falls outside the upstream vocabulary")
+    if any(not NATIVE_NOTE_TOKEN_MIN <= token_id < NATIVE_NOTE_TOKEN_MAX_EXCLUSIVE for token_id in tokens[2::3]):
+        raise ValueError("Native Anticipation note token falls outside the upstream vocabulary")
+
+
+def segment_native_event_tokens(event_tokens: Iterable[int]) -> List[Dict[str, Any]]:
+    """Split a complete source stream into vocabulary-safe 100-second windows."""
+
+    tokens = [int(token_id) for token_id in event_tokens]
+    validate_native_event_tokens(tokens, allow_absolute_time_overflow=True)
+    segments: List[Dict[str, Any]] = []
+    for index in range(0, len(tokens), 3):
+        time_token, duration_token, note_token = tokens[index : index + 3]
+        start = time_token // NATIVE_TIME_TOKEN_MAX_EXCLUSIVE * NATIVE_TIME_TOKEN_MAX_EXCLUSIVE
+        if not segments or segments[-1]["start_time_token"] != start:
+            segments.append({"start_time_token": start, "event_tokens": []})
+        segments[-1]["event_tokens"].extend([time_token - start, duration_token, note_token])
+    for segment in segments:
+        validate_native_event_tokens(segment["event_tokens"])
+    return segments
 
 
 def normalize_native_model_tokens(model_token_ids: Iterable[int]) -> Tuple[List[int], Dict[str, Any]]:

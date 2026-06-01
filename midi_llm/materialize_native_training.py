@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from .native_backbone import upstream_generation_prompt
-from .native_tokens import native_event_tokens_to_model_tokens
+from .native_tokens import native_event_tokens_to_model_tokens, segment_native_event_tokens
 
 
 def materialize_native_training_dataset(
@@ -38,23 +38,46 @@ def materialize_native_training_dataset(
             continue
         try:
             event_tokens = _midi_to_event_tokens(source)
-            model_tokens = native_event_tokens_to_model_tokens(event_tokens)
+            if not event_tokens:
+                raise ValueError("Native MIDI source produced no Anticipation events")
+            segments = segment_native_event_tokens(event_tokens)
         except (OSError, RuntimeError, ValueError) as error:
             errors.append({"work_id": work_id, "path": str(source), "reason": str(error)})
             continue
-        if max_event_tokens is not None and len(event_tokens) > max_event_tokens:
+        oversized_segments = [
+            segment
+            for segment in segments
+            if max_event_tokens is not None and len(segment["event_tokens"]) > max_event_tokens
+        ]
+        if oversized_segments:
             oversized.append(
                 {
                     "work_id": work_id,
                     "path": str(source),
                     "event_token_count": len(event_tokens),
                     "max_event_tokens": max_event_tokens,
-                    "reason": "complete piece exceeds configured context budget; excluded without truncation",
+                    "oversized_segment_event_token_counts": [
+                        len(segment["event_tokens"])
+                        for segment in oversized_segments
+                    ],
+                    "reason": "a native time window exceeds configured context budget; excluded without truncation",
                 }
             )
             continue
-        token_path = tokens_dir / f"{work_id}.model_tokens.json"
-        token_path.write_text(json.dumps(model_tokens, separators=(",", ":")) + "\n", encoding="utf-8")
+        materialized_segments = []
+        for segment_index, segment in enumerate(segments, start=1):
+            model_tokens = native_event_tokens_to_model_tokens(segment["event_tokens"])
+            token_path = tokens_dir / f"{work_id}.segment-{segment_index:03d}.model_tokens.json"
+            token_path.write_text(json.dumps(model_tokens, separators=(",", ":")) + "\n", encoding="utf-8")
+            materialized_segments.append(
+                {
+                    "segment": segment_index,
+                    "start_time_token": segment["start_time_token"],
+                    "native_event_token_count": len(segment["event_tokens"]),
+                    "native_model_token_count": len(model_tokens),
+                    "native_model_tokens_path": str(token_path.relative_to(output_dir)),
+                }
+            )
         split = row.get("split", "train")
         split_rows.setdefault(split, []).append(
             {
@@ -64,9 +87,9 @@ def materialize_native_training_dataset(
                 "source_license": row.get("source_license", ""),
                 "source_license_url": row.get("source_license_url", ""),
                 "native_midi_path": str(source),
-                "native_model_tokens_path": str(token_path.relative_to(output_dir)),
                 "native_event_token_count": len(event_tokens),
-                "native_model_token_count": len(model_tokens),
+                "native_model_token_count": sum(segment["native_model_token_count"] for segment in materialized_segments),
+                "native_segments": materialized_segments,
                 "prompt": classical_native_prompt(row),
                 "upstream_prompt": upstream_generation_prompt(classical_native_prompt(row)),
                 "controls": {
@@ -78,6 +101,7 @@ def materialize_native_training_dataset(
                     "style_tags": row.get("style_tags", []),
                 },
                 "complete_piece_retained": True,
+                "segments_cover_complete_piece": True,
             }
         )
     for split in ("train", "valid", "test"):
@@ -92,21 +116,28 @@ def materialize_native_training_dataset(
         "examples_written": len(written),
         "examples_failed": len(errors),
         "examples_excluded_oversized": len(oversized),
+        "native_segments_written": sum(len(row["native_segments"]) for row in written),
+        "works_requiring_multiple_native_segments": sum(len(row["native_segments"]) > 1 for row in written),
         "split_counts": {split: len(split_rows[split]) for split in ("train", "valid", "test")},
         "composer_style_counts": dict(sorted(Counter(row["controls"]["composer_style"] for row in written).items())),
         "composer_period_counts": dict(sorted(Counter(row["controls"]["composer_period"] for row in written).items())),
         "genre_counts": dict(sorted(Counter(row["controls"]["genre"] for row in written).items())),
-        "event_token_counts": _token_count_summary(written),
+        "complete_piece_event_token_counts": _token_count_summary(written, "native_event_token_count"),
+        "segment_event_token_counts": _token_count_summary(
+            [segment for row in written for segment in row["native_segments"]],
+            "native_event_token_count",
+        ),
         "invariants": {
             "representation": "upstream-native-anticipation-midi-tokens",
             "upstream_native_vocabulary_is_preserved": True,
             "complete_pieces_are_not_truncated": True,
+            "long_pieces_are_covered_by_rebased_native_time_windows": True,
             "score_dsl_is_not_used_as_composition_target": True,
             "composer_style_is_an_explicit_control": True,
         },
         "artifacts": {
             "splits": "train.jsonl, valid.jsonl, test.jsonl",
-            "tokens": "tokens/<work_id>.model_tokens.json",
+            "tokens": "tokens/<work_id>.segment-<nnn>.model_tokens.json",
             "errors": "materialization_errors.jsonl",
             "oversized": "oversized_complete_pieces.jsonl",
         },
@@ -145,8 +176,8 @@ def _resolve_source(root: Path, value: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def _token_count_summary(rows: List[Dict[str, Any]]) -> Dict[str, Optional[int]]:
-    counts = sorted(row["native_event_token_count"] for row in rows)
+def _token_count_summary(rows: List[Dict[str, Any]], field: str) -> Dict[str, Optional[int]]:
+    counts = sorted(row[field] for row in rows)
     if not counts:
         return {"min": None, "median": None, "max": None}
     return {"min": counts[0], "median": counts[len(counts) // 2], "max": counts[-1]}

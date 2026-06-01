@@ -60,6 +60,7 @@ from midi_llm.native_tokens import (
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
     native_event_tokens_to_model_tokens,
     normalize_native_model_tokens,
+    segment_native_event_tokens,
 )
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
@@ -128,11 +129,26 @@ class ScoreFirstTest(unittest.TestCase):
 
     def test_native_training_tokens_preserve_upstream_extended_vocabulary(self):
         self.assertEqual(
-            native_event_tokens_to_model_tokens([1, 2, 3]),
-            [NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1, LLAMA_VOCAB_SIZE + 2, LLAMA_VOCAB_SIZE + 3],
+            native_event_tokens_to_model_tokens([1, 10_002, 11_003]),
+            [
+                NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
+                LLAMA_VOCAB_SIZE + 1,
+                LLAMA_VOCAB_SIZE + 10_002,
+                LLAMA_VOCAB_SIZE + 11_003,
+            ],
         )
         with self.assertRaises(ValueError):
             native_event_tokens_to_model_tokens([1, 2])
+
+    def test_native_training_segments_rebase_time_without_dropping_events(self):
+        segments = segment_native_event_tokens([9999, 10001, 11060, 10001, 10002, 11062])
+        self.assertEqual(
+            segments,
+            [
+                {"start_time_token": 0, "event_tokens": [9999, 10001, 11060]},
+                {"start_time_token": 10000, "event_tokens": [1, 10002, 11062]},
+            ],
+        )
 
     def test_native_backbone_manifest_keeps_native_midi_authoritative(self):
         config = NativeBackboneConfig(prompt="A solo piano nocturne.", output_dir="generated_native_backbone/test")
@@ -945,7 +961,7 @@ class ScoreFirstTest(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            with patch("midi_llm.materialize_native_training._midi_to_event_tokens", return_value=[1, 2, 3]):
+            with patch("midi_llm.materialize_native_training._midi_to_event_tokens", return_value=[1, 10_002, 11_003]):
                 summary = materialize_native_training_dataset(manifest, root / "native", root)
             self.assertEqual(summary["examples_written"], 1)
             self.assertTrue(summary["invariants"]["upstream_native_vocabulary_is_preserved"])
@@ -954,8 +970,17 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(row["controls"]["composer_style"], "chopin")
             self.assertIn("style of Chopin", row["prompt"])
             self.assertEqual(
-                json.loads((root / "native" / row["native_model_tokens_path"]).read_text(encoding="utf-8")),
-                [NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1, LLAMA_VOCAB_SIZE + 2, LLAMA_VOCAB_SIZE + 3],
+                json.loads(
+                    (root / "native" / row["native_segments"][0]["native_model_tokens_path"]).read_text(
+                        encoding="utf-8"
+                    )
+                ),
+                [
+                    NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
+                    LLAMA_VOCAB_SIZE + 1,
+                    LLAMA_VOCAB_SIZE + 10_002,
+                    LLAMA_VOCAB_SIZE + 11_003,
+                ],
             )
             self.assertIn("world-class composer", row["upstream_prompt"])
 
@@ -968,7 +993,10 @@ class ScoreFirstTest(unittest.TestCase):
                 json.dumps({"work_id": "large", "split": "train", "native_midi_path": "source.mid"}) + "\n",
                 encoding="utf-8",
             )
-            with patch("midi_llm.materialize_native_training._midi_to_event_tokens", return_value=[1, 2, 3, 4, 5, 6]):
+            with patch(
+                "midi_llm.materialize_native_training._midi_to_event_tokens",
+                return_value=[1, 10_002, 11_003, 4, 10_005, 11_006],
+            ):
                 summary = materialize_native_training_dataset(manifest, root / "native", root, max_event_tokens=3)
             self.assertEqual(summary["examples_written"], 0)
             self.assertEqual(summary["examples_excluded_oversized"], 1)
