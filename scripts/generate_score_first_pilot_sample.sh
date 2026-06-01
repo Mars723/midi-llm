@@ -22,6 +22,7 @@ python -m midi_llm.generate_checkpoint \
   --form ABA \
   --difficulty intermediate \
   --duration-minutes 3 \
+  --seed "${MIDI_LLM_SAMPLE_SEED:-2300}" \
   --candidates "${MIDI_LLM_SAMPLE_CANDIDATES:-2}" \
   --section-candidates "${MIDI_LLM_SAMPLE_SECTION_CANDIDATES:-2}" \
   --temperature "${MIDI_LLM_SAMPLE_TEMPERATURE:-0.8}" \

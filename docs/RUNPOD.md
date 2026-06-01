@@ -98,10 +98,13 @@ mkdir -p "$MIDI_LLM_BACKUP_ROOT"
 bash scripts/run_score_first_stages.sh two-staff-refinement > "$MIDI_LLM_BACKUP_ROOT/stage09.log" 2>&1 &
 TRAINING_PID=$!
 bash scripts/watch_score_first_backup.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROOT/backup-watch.log" 2>&1 &
+bash scripts/run_score_first_post_training.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROOT/post-training.log" 2>&1 &
 ```
 
 The watcher continuously mirrors checkpoints, logs, recovery bundles, and a
-final adapter archive into `MIDI_LLM_BACKUP_ROOT`.
+final adapter archive into `MIDI_LLM_BACKUP_ROOT`. The post-training watcher
+also tries several seeds and mirrors the first validated complete-piece
+sample.
 
 To add offsite Google Drive backup, create an ephemeral `rclone`
 configuration on the container disk:
