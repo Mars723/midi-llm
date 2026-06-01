@@ -114,3 +114,11 @@ bash scripts/run_native_classical_stages.sh pilot
 Generate fixed-seed upstream and adapter candidates after each checkpoint.
 Reject a checkpoint if native MIDI validity, density drift, or baseline prompt
 quality regresses, even when its training loss decreases.
+
+Run adapter parity with the same upstream-native generator:
+
+```bash
+bash scripts/run_native_adapter_parity.sh \
+  /root/midllm-local/training_runs/native_classical_v1/02_pilot/adapter \
+  /root/midllm-local/generated_native_backbone/native_classical_v1_pilot
+```

@@ -167,6 +167,16 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertTrue(manifest["native_midi_is_authoritative_musical_content"])
         self.assertTrue(manifest["score_conversion_is_draft_only"])
 
+    def test_native_backbone_manifest_labels_adapter_parity_replay(self):
+        config = NativeBackboneConfig(
+            prompt="A solo piano prelude.",
+            output_dir="generated_native_backbone/test",
+            adapter="training_runs/native/adapter",
+        )
+        manifest = native_backbone_manifest(config, [], [])
+        self.assertEqual(manifest["adapter"], "training_runs/native/adapter")
+        self.assertEqual(manifest["purpose"], "adapter-parity-replay-gate")
+
     def test_native_backbone_stats_measure_native_content_without_score_claims(self):
         parsed = ParsedMidi(
             ticks_per_beat=480,

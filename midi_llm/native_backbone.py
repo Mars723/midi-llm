@@ -30,6 +30,7 @@ class NativeBackboneConfig:
     prompt: str
     output_dir: str
     model: str = DEFAULT_MODEL
+    adapter: str | None = None
     n_outputs: int = 4
     seed: int = 23
     temperature: float = 1.0
@@ -51,7 +52,7 @@ def generate_native_backbone(config: NativeBackboneConfig) -> Path:
     _validate_config(config)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tokenizer, model, torch = _load_upstream_model(config.model)
+    tokenizer, model, torch = _load_upstream_model(config.model, config.adapter)
     candidates: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
     for index in range(1, config.n_outputs + 1):
@@ -125,9 +126,9 @@ def native_backbone_manifest(
 
     return {
         "pipeline": "upstream-native-anticipation-midi-backbone-v1",
-        "purpose": "upstream-live-demo-parity-gate",
+        "purpose": "upstream-live-demo-parity-gate" if config.adapter is None else "adapter-parity-replay-gate",
         "model": config.model,
-        "adapter": None,
+        "adapter": config.adapter,
         "representation": "upstream-native-anticipation-midi-tokens",
         "native_midi_is_authoritative_musical_content": True,
         "score_conversion_is_draft_only": True,
@@ -192,7 +193,7 @@ def _max_active_notes(parsed: ParsedMidi) -> int:
     return maximum
 
 
-def _load_upstream_model(model_path: str):
+def _load_upstream_model(model_path: str, adapter_path: str | None = None):
     try:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -206,6 +207,12 @@ def _load_upstream_model(model_path: str):
         dtype=torch.bfloat16,
         trust_remote_code=True,
     ).to(device="cuda")
+    if adapter_path:
+        try:
+            from peft import PeftModel
+        except ImportError as error:
+            raise RuntimeError("Install peft before loading a native MIDI adapter") from error
+        model = PeftModel.from_pretrained(model, adapter_path).to(device="cuda")
     model.eval()
     return tokenizer, model, torch
 
@@ -271,6 +278,7 @@ def _write_index(output_dir: Path, manifest: Dict[str, Any]) -> None:
 <body>
 <h1>Upstream Native MIDI Backbone</h1>
 <p>This parity-gate run uses the upstream MIDI-LLM checkpoint with its native Anticipation MIDI tokens.</p>
+<p>Adapter: {escape(str(manifest["adapter"] or "none"))}</p>
 <p>The native MIDI files are authoritative musical content. Converted score galleries are draft-only previews.</p>
 <ul>{''.join(rows)}</ul>
 </body>
@@ -306,6 +314,7 @@ def main() -> None:
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--adapter", help="Optional LoRA adapter for fixed-seed parity replay")
     parser.add_argument("--n-outputs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -319,6 +328,7 @@ def main() -> None:
             prompt=args.prompt,
             output_dir=args.output_dir or _default_output_dir(),
             model=args.model,
+            adapter=args.adapter,
             n_outputs=args.n_outputs,
             seed=args.seed,
             temperature=args.temperature,
