@@ -134,6 +134,27 @@ override when the network-mounted persistent volume stalls on large adapter
 reads. Training checkpoints and final outputs must still use
 `MIDI_LLM_RUN_ROOT` on the persistent volume.
 
+Use the same local-read pattern for long checkpoint-backed generation. Keep
+streamed raw DSL on the disposable container disk and mirror only stable
+section partials while sampling:
+
+```bash
+export MIDI_LLM_SAMPLE_ADAPTER_DIR=/root/midllm-local/10_variation_repair_refinement-adapter
+OUTPUT_ROOT=/root/midllm-local/generated_score_first
+export MIDI_LLM_SAMPLE_OUTPUT="$OUTPUT_ROOT/checkpoint_sample_001"
+mkdir -p "$OUTPUT_ROOT"
+
+bash scripts/generate_score_first_pilot_sample.sh > "$MIDI_LLM_BACKUP_ROOT/sample.log" 2>&1 &
+GENERATION_PID=$!
+bash scripts/watch_score_first_generation_backup.sh "$GENERATION_PID" "$OUTPUT_ROOT" \
+  > "$MIDI_LLM_BACKUP_ROOT/generation-backup-watch.log" 2>&1 &
+```
+
+The generation watcher copies completed `partial_after_<section>` ScoreIR files
+and failure reports into the persistent backup root and configured Drive
+remote. It intentionally skips raw DSL files because they are updated while
+tokens stream.
+
 To add offsite Google Drive backup, create an ephemeral `rclone`
 configuration on the container disk:
 
