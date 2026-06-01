@@ -7,6 +7,8 @@ BACKUP_ROOT=${MIDI_LLM_BACKUP_ROOT:-"$ROOT/training_backups"}
 RECOVERY_ROOT=${MIDI_LLM_RECOVERY_ROOT:-}
 RCLONE_REMOTE=${MIDI_LLM_RCLONE_REMOTE:-}
 STAGE=${MIDI_LLM_BACKUP_STAGE:-09_two_staff_refinement}
+MIRROR_RUN_ROOT=${MIDI_LLM_BACKUP_MIRROR_RUN_ROOT:-1}
+CREATE_ADAPTER_ARCHIVE=${MIDI_LLM_CREATE_ADAPTER_ARCHIVE:-1}
 RUN_NAME=$(basename "$RUN_ROOT")
 LOCK_DIR="$BACKUP_ROOT/.backup-lock"
 
@@ -17,8 +19,11 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK_DIR"' EXIT
 
-mkdir -p "$BACKUP_ROOT/training_runs/$RUN_NAME" "$BACKUP_ROOT/metadata"
-rsync -a --delete "$RUN_ROOT/" "$BACKUP_ROOT/training_runs/$RUN_NAME/"
+mkdir -p "$BACKUP_ROOT/metadata"
+if [[ "$MIRROR_RUN_ROOT" != 0 ]]; then
+  mkdir -p "$BACKUP_ROOT/training_runs/$RUN_NAME"
+  rsync -a --delete "$RUN_ROOT/" "$BACKUP_ROOT/training_runs/$RUN_NAME/"
+fi
 
 if [[ -d "$BACKUP_ROOT/logs" ]]; then
   mkdir -p "$BACKUP_ROOT/log-snapshots/latest"
@@ -37,7 +42,7 @@ fi
   printf 'git_commit=%s\n' "$(git -C "$ROOT" rev-parse HEAD)"
 } > "$BACKUP_ROOT/metadata/latest.txt"
 
-if [[ -d "$RUN_ROOT/$STAGE/adapter" ]]; then
+if [[ "$CREATE_ADAPTER_ARCHIVE" != 0 && -d "$RUN_ROOT/$STAGE/adapter" ]]; then
   mkdir -p "$BACKUP_ROOT/artifacts"
   archive="$BACKUP_ROOT/artifacts/${STAGE}-adapter.tar.gz"
   tmp_archive="$archive.tmp"
@@ -48,9 +53,12 @@ fi
 
 if [[ -n "$RCLONE_REMOTE" ]]; then
   command -v rclone >/dev/null
+  rclone sync "$RUN_ROOT/" "$RCLONE_REMOTE/training_runs/$RUN_NAME/" \
+    --create-empty-src-dirs
   rclone sync "$BACKUP_ROOT/" "$RCLONE_REMOTE/" \
     --create-empty-src-dirs \
     --exclude '/logs/**' \
+    --exclude '/training_runs/**' \
     --exclude '/.backup-lock/**'
 fi
 

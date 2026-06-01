@@ -93,6 +93,8 @@ export MIDI_LLM_RUN_ROOT=/workspace/midi-llm/training_runs/score_first_intermedi
 export MIDI_LLM_BACKUP_ROOT=/workspace/midillm-backups
 export MIDI_LLM_RECOVERY_ROOT=/workspace/midillm-recovery
 export MIDI_LLM_SAVE_STEPS=25
+export MIDI_LLM_BACKUP_MIRROR_RUN_ROOT=0
+export MIDI_LLM_CREATE_ADAPTER_ARCHIVE=0
 
 mkdir -p "$MIDI_LLM_BACKUP_ROOT"
 bash scripts/run_score_first_stages.sh two-staff-refinement > "$MIDI_LLM_BACKUP_ROOT/stage09.log" 2>&1 &
@@ -101,12 +103,14 @@ bash scripts/watch_score_first_backup.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROO
 bash scripts/run_score_first_post_training.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROOT/post-training.log" 2>&1 &
 ```
 
-The watcher continuously mirrors checkpoints, frozen log snapshots, recovery
-bundles, and a final adapter archive into `MIDI_LLM_BACKUP_ROOT`. Live logs
-remain in `logs/`; stable Drive copies are written from `log-snapshots/latest/`
-so an actively appended log cannot cause a self-referential sync loop. The
-post-training watcher also tries several seeds and mirrors the first validated
-complete-piece sample.
+On ordinary disks, the watcher mirrors checkpoints, frozen log snapshots,
+recovery bundles, and a final adapter archive into `MIDI_LLM_BACKUP_ROOT`.
+For a Runpod network-mounted persistent volume, disable the redundant same-disk
+run mirror and adapter archive as shown above. Live logs remain in `logs/`;
+stable Drive copies are written from `log-snapshots/latest/` so an actively
+appended log cannot cause a self-referential sync loop. The post-training
+watcher also tries several seeds and mirrors the first validated complete-piece
+sample.
 
 If a Pod stops after a numbered Trainer checkpoint has been written, resume
 the exact optimizer step instead of restarting the stage:
@@ -126,10 +130,10 @@ export MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod'
 ```
 
 Set those two exports before starting the watcher. Each backup pass will then
-sync the persistent backup directory to Google Drive as well. The watcher
-explicitly excludes `rclone.conf` from mirrored recovery bundles so OAuth
-credentials do not enter the persistent backup or the Drive mirror. Recreate
-the ephemeral configuration after rebuilding a Pod.
+sync the training source directory and persistent backup metadata to Google
+Drive. The watcher explicitly excludes `rclone.conf` from mirrored recovery
+bundles so OAuth credentials do not enter the persistent backup or the Drive
+mirror. Recreate the ephemeral configuration after rebuilding a Pod.
 
 ## Official References
 
