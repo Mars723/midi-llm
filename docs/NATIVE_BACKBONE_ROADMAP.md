@@ -50,6 +50,11 @@ Start with larger native token budgets and measure natural-stop behavior.
 Then add native-token continuation, overlap scoring, cadence-aware stopping,
 and candidate ranking while keeping the same MIDI representation.
 
+Classical specialization data follows
+[`CLASSICAL_NATIVE_DATASET.md`](CLASSICAL_NATIVE_DATASET.md): preserve complete
+pieces, add composer and period controls, and materialize upstream Anticipation
+MIDI tokens directly. ScoreDSL is not the composition fine-tuning target.
+
 Use these papers as design references:
 
 - [`MIDI-LLM`](https://arxiv.org/abs/2511.03942) adapts a text LLM to native

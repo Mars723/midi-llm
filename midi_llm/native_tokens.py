@@ -11,6 +11,18 @@ NATIVE_MIDI_BOS_MODEL_TOKEN_ID = LLAMA_VOCAB_SIZE + AMT_GPT2_BOS_ID
 ALLOWED_NATIVE_MODEL_TOKEN_IDS = range(LLAMA_VOCAB_SIZE, NATIVE_MIDI_BOS_MODEL_TOKEN_ID)
 
 
+def native_event_tokens_to_model_tokens(event_tokens: Iterable[int], *, include_bos: bool = True) -> List[int]:
+    """Shift Anticipation event IDs into the MIDI-LLM extended vocabulary."""
+
+    normalized = [int(token_id) for token_id in event_tokens]
+    if len(normalized) % 3:
+        raise ValueError("Native Anticipation event sequence must contain complete triples")
+    if any(not 0 <= token_id < AMT_GPT2_BOS_ID for token_id in normalized):
+        raise ValueError("Native Anticipation event token falls outside the upstream vocabulary")
+    prefix = [NATIVE_MIDI_BOS_MODEL_TOKEN_ID] if include_bos else []
+    return prefix + [LLAMA_VOCAB_SIZE + token_id for token_id in normalized]
+
+
 def normalize_native_model_tokens(model_token_ids: Iterable[int]) -> Tuple[List[int], Dict[str, Any]]:
     """Shift generated model tokens into Anticipation event IDs and retain complete triples.
 

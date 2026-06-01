@@ -263,13 +263,13 @@ def _normalize_archive_path(value: str) -> str:
     return value.replace("\\", "/").removeprefix("./")
 
 
-def _manifest_paths(path: Path | str) -> Set[str]:
+def _manifest_paths(path: Path | str, field: str = "path") -> Set[str]:
     paths = set()
     with Path(path).open(encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
-            value = json.loads(line).get("path", "")
+            value = json.loads(line).get(field, "")
             if value:
                 paths.add(_normalize_archive_path(str(value)))
     return paths
@@ -291,7 +291,9 @@ def main() -> None:
     parser.add_argument("--include-midi", action="store_true")
     parser.add_argument("--extract-subsets", action="store_true")
     parser.add_argument("--extract-mxl", action="store_true")
+    parser.add_argument("--extract-midi", action="store_true")
     parser.add_argument("--mxl-manifest", help="Extract only MXL paths referenced by this JSONL manifest")
+    parser.add_argument("--midi-manifest", help="Extract only native MIDI paths referenced by this JSONL manifest")
     parser.add_argument("--connections", type=int, default=4)
     args = parser.parse_args()
     resources = tuple(_resources_from_args(args))
@@ -302,11 +304,19 @@ def main() -> None:
         if not args.include_mxl:
             parser.error("--extract-mxl requires --include-mxl")
         extract.append("mxl.tar.gz")
+    if args.extract_midi:
+        if not args.include_midi:
+            parser.error("--extract-midi requires --include-midi")
+        extract.append("mid.tar.gz")
     extract_members = {}
     if args.mxl_manifest:
         if not args.extract_mxl:
             parser.error("--mxl-manifest requires --extract-mxl")
         extract_members["mxl.tar.gz"] = _manifest_paths(args.mxl_manifest)
+    if args.midi_manifest:
+        if not args.extract_midi:
+            parser.error("--midi-manifest requires --extract-midi")
+        extract_members["mid.tar.gz"] = _manifest_paths(args.midi_manifest, "native_midi_path")
     print(
         json.dumps(
             fetch_resources(

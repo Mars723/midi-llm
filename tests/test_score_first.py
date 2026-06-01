@@ -18,6 +18,7 @@ from midi_llm.curriculum import prepare_curriculum
 from midi_llm.evaluate import evaluate_score
 from midi_llm.fetch_pdmx import (
     _extract_tar,
+    _manifest_paths,
     _missing_ranges,
     _normalize_existing_parts,
     _part_path,
@@ -43,6 +44,7 @@ from midi_llm.generate_checkpoint import (
     build_parser as build_checkpoint_parser,
 )
 from midi_llm.import_midi import MidiNote, ParsedMidi, TempoPoint, draft_from_parsed, parse_midi, select_structural_tempos
+from midi_llm.materialize_native_training import classical_native_prompt, materialize_native_training_dataset
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from midi_llm.musicxml_score import import_musicxml_score
@@ -56,12 +58,19 @@ from midi_llm.native_backbone import (
 from midi_llm.native_tokens import (
     LLAMA_VOCAB_SIZE,
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
+    native_event_tokens_to_model_tokens,
     normalize_native_model_tokens,
 )
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
-from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_manifest
+from midi_llm.prepare_pdmx import (
+    _composer_style_label,
+    _is_solo_piano,
+    _quality_label,
+    _tasks_for_quality,
+    prepare_manifest,
+)
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.research_symupe import (
@@ -116,6 +125,14 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(tokens, [1, 2, 3])
         self.assertEqual(report["dropped_incomplete_event_tokens"], 2)
         self.assertEqual(report["stop_model_token_id"], 128_009)
+
+    def test_native_training_tokens_preserve_upstream_extended_vocabulary(self):
+        self.assertEqual(
+            native_event_tokens_to_model_tokens([1, 2, 3]),
+            [NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1, LLAMA_VOCAB_SIZE + 2, LLAMA_VOCAB_SIZE + 3],
+        )
+        with self.assertRaises(ValueError):
+            native_event_tokens_to_model_tokens([1, 2])
 
     def test_native_backbone_manifest_keeps_native_midi_authoritative(self):
         config = NativeBackboneConfig(prompt="A solo piano nocturne.", output_dir="generated_native_backbone/test")
@@ -835,6 +852,126 @@ class ScoreFirstTest(unittest.TestCase):
         tier, _, evidence = _quality_label(arranged, "classical-piano")
         self.assertNotEqual(tier, "canonical-core")
         self.assertFalse(evidence["piano_native_title"])
+
+    def test_pdmx_manifest_exports_composer_style_controls(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            metadata = root / "PDMX.csv"
+            with metadata.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=(
+                        "mxl",
+                        "title",
+                        "composer_name",
+                        "tracks",
+                        "subset:all_valid",
+                        "subset:no_license_conflict",
+                        "is_best_unique_arrangement",
+                        "best_unique_arrangement",
+                        "genres",
+                        "license",
+                        "license_url",
+                    ),
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "mxl": "./mxl/nocturne.mxl",
+                        "title": "Nocturne Op. 9 No. 2",
+                        "composer_name": "Frederic Chopin",
+                        "tracks": "0-0",
+                        "subset:all_valid": "True",
+                        "subset:no_license_conflict": "True",
+                        "is_best_unique_arrangement": "True",
+                        "best_unique_arrangement": "./data/nocturne.json",
+                        "genres": "classical",
+                        "license": "publicdomain",
+                        "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+                    }
+                )
+            summary = prepare_manifest(metadata, root / "manifest", composers=("chopin",))
+            self.assertEqual(summary["composer_style_counts"], {"chopin": 1})
+            self.assertEqual(summary["composer_period_counts"], {"romantic": 1})
+            row = json.loads((root / "manifest" / "pdmx_score_first_manifest.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(row["composer_style"], "chopin")
+            self.assertEqual(row["composer_period"], "romantic")
+            self.assertEqual(
+                row["style_tags"],
+                ["composer-style:chopin", "period:romantic", "genre:nocturne"],
+            )
+            self.assertEqual(row["source_dataset"], "PDMX")
+            self.assertEqual(row["source_license"], "publicdomain")
+
+    def test_pdmx_solo_piano_accepts_multi_staff_tracks_but_rejects_duets(self):
+        self.assertTrue(_is_solo_piano({"tracks": "0-0", "title": "Beethoven Piano Sonata No. 8"}))
+        self.assertFalse(_is_solo_piano({"tracks": "0-0", "title": "Mozart Piano Duet K. 501"}))
+        self.assertFalse(_is_solo_piano({"tracks": "0-40", "title": "Violin Sonata"}))
+        self.assertEqual(
+            _composer_style_label({"composer_name": "Johann Sebastian Bach"})[0],
+            "bach",
+        )
+
+    def test_pdmx_midi_manifest_paths_select_native_sources(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            manifest = Path(raw_dir) / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps({"path": "./mxl/a.mxl", "native_midi_path": "./mid/a.mid"}) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_manifest_paths(manifest, "native_midi_path"), {"mid/a.mid"})
+
+    def test_native_training_materializer_keeps_complete_piece_and_style_controls(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            (root / "source.mid").touch()
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "chopin-nocturne",
+                        "split": "train",
+                        "native_midi_path": "source.mid",
+                        "source_dataset": "PDMX",
+                        "source_license": "publicdomain",
+                        "composer_style": "chopin",
+                        "composer_period": "romantic",
+                        "genre": "nocturne",
+                        "form": "ABA",
+                        "difficulty": "intermediate",
+                        "style_tags": ["composer-style:chopin", "period:romantic", "genre:nocturne"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch("midi_llm.materialize_native_training._midi_to_event_tokens", return_value=[1, 2, 3]):
+                summary = materialize_native_training_dataset(manifest, root / "native", root)
+            self.assertEqual(summary["examples_written"], 1)
+            self.assertTrue(summary["invariants"]["upstream_native_vocabulary_is_preserved"])
+            row = json.loads((root / "native" / "train.jsonl").read_text(encoding="utf-8"))
+            self.assertTrue(row["complete_piece_retained"])
+            self.assertEqual(row["controls"]["composer_style"], "chopin")
+            self.assertIn("style of Chopin", row["prompt"])
+            self.assertEqual(
+                json.loads((root / "native" / row["native_model_tokens_path"]).read_text(encoding="utf-8")),
+                [NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1, LLAMA_VOCAB_SIZE + 2, LLAMA_VOCAB_SIZE + 3],
+            )
+            self.assertIn("world-class composer", row["upstream_prompt"])
+
+    def test_native_training_materializer_excludes_oversized_piece_without_truncation(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            (root / "source.mid").touch()
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps({"work_id": "large", "split": "train", "native_midi_path": "source.mid"}) + "\n",
+                encoding="utf-8",
+            )
+            with patch("midi_llm.materialize_native_training._midi_to_event_tokens", return_value=[1, 2, 3, 4, 5, 6]):
+                summary = materialize_native_training_dataset(manifest, root / "native", root, max_event_tokens=3)
+            self.assertEqual(summary["examples_written"], 0)
+            self.assertEqual(summary["examples_excluded_oversized"], 1)
 
     def test_pdmx_fetch_selective_extract_rejects_escaping_members(self):
         with tempfile.TemporaryDirectory() as raw_dir:

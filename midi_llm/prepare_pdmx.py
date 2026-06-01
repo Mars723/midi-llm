@@ -26,64 +26,65 @@ GENRE_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 DIFFICULTY_LABELS = ("easy", "intermediate", "advanced")
 QUALITY_FILTERS = ("metadata-curated", "canonical-core")
 GENERIC_GENRES = ("classical-piano", "unclassified-piano")
-CANONICAL_CLASSICAL_COMPOSERS = (
-    "albinoni",
-    "alkan",
-    "arensky",
-    "bach",
-    "balakirev",
-    "bartok",
-    "beethoven",
-    "borodin",
-    "brahms",
-    "burgmuller",
-    "chopin",
-    "clementi",
-    "corelli",
-    "couperin",
-    "czerny",
-    "debussy",
-    "dvorak",
-    "faure",
-    "frescobaldi",
-    "glazunov",
-    "gounod",
-    "grieg",
-    "handel",
-    "hanon",
-    "haydn",
-    "heller",
-    "kabalevsky",
-    "korsakov",
-    "kuhlau",
-    "liszt",
-    "lully",
-    "mendelssohn",
-    "monteverdi",
-    "moszkowski",
-    "mussorgsky",
-    "mozart",
-    "offenbach",
-    "pachelbel",
-    "poulenc",
-    "prokofiev",
-    "purcell",
-    "rachmaninoff",
-    "rameau",
-    "ravel",
-    "satie",
-    "scarlatti",
-    "schubert",
-    "schumann",
-    "scriabin",
-    "shostakovich",
-    "strauss",
-    "taneyev",
-    "telemann",
-    "tchaikovsky",
-    "verdi",
-    "vivaldi",
-)
+COMPOSER_STYLE_PERIODS = {
+    "albinoni": "baroque",
+    "alkan": "romantic",
+    "arensky": "romantic",
+    "bach": "baroque",
+    "balakirev": "romantic",
+    "bartok": "modern",
+    "beethoven": "classical-romantic-transition",
+    "borodin": "romantic",
+    "brahms": "romantic",
+    "burgmuller": "romantic",
+    "chopin": "romantic",
+    "clementi": "classical",
+    "corelli": "baroque",
+    "couperin": "baroque",
+    "czerny": "classical-romantic-transition",
+    "debussy": "impressionist",
+    "dvorak": "romantic",
+    "faure": "romantic",
+    "frescobaldi": "baroque",
+    "glazunov": "romantic",
+    "gounod": "romantic",
+    "grieg": "romantic",
+    "handel": "baroque",
+    "hanon": "romantic",
+    "haydn": "classical",
+    "heller": "romantic",
+    "kabalevsky": "modern",
+    "korsakov": "romantic",
+    "kuhlau": "classical-romantic-transition",
+    "liszt": "romantic",
+    "lully": "baroque",
+    "mendelssohn": "romantic",
+    "monteverdi": "baroque",
+    "moszkowski": "romantic",
+    "mussorgsky": "romantic",
+    "mozart": "classical",
+    "offenbach": "romantic",
+    "pachelbel": "baroque",
+    "poulenc": "modern",
+    "prokofiev": "modern",
+    "purcell": "baroque",
+    "rachmaninoff": "romantic",
+    "rameau": "baroque",
+    "ravel": "impressionist",
+    "satie": "modern",
+    "scarlatti": "baroque",
+    "schubert": "classical-romantic-transition",
+    "schumann": "romantic",
+    "scriabin": "romantic",
+    "shostakovich": "modern",
+    "strauss": "romantic",
+    "taneyev": "romantic",
+    "telemann": "baroque",
+    "tchaikovsky": "romantic",
+    "verdi": "romantic",
+    "vivaldi": "baroque",
+}
+CANONICAL_CLASSICAL_COMPOSERS = tuple(COMPOSER_STYLE_PERIODS)
 ARRANGEMENT_TITLE_MARKERS = (
     "2 pianos",
     "4 hands",
@@ -111,7 +112,9 @@ ARRANGEMENT_TITLE_MARKERS = (
     "two pianos",
     "violin",
     "cello",
+    "duet",
 )
+MULTI_PIANO_TITLE_MARKERS = ("2 pianos", "4 hands", "duet", "four hands", "two pianos")
 
 
 def prepare_manifest(
@@ -119,6 +122,7 @@ def prepare_manifest(
     output_dir: Path | str,
     *,
     genres: Sequence[str] = (),
+    composers: Sequence[str] = (),
     difficulty: Optional[str] = None,
     quality: Optional[str] = None,
     min_measures: Optional[int] = None,
@@ -141,6 +145,7 @@ def prepare_manifest(
     ]
     difficulty_scores = _difficulty_scores(eligible)
     requested_genres = set(genres)
+    requested_composers = {_normalize_text(composer) for composer in composers}
     accepted = []
     seen = set()
     for row, difficulty_score in zip(eligible, difficulty_scores):
@@ -150,10 +155,14 @@ def prepare_manifest(
         seen.add(work_id)
         genre, genre_evidence = _genre_label(row)
         form, form_evidence = _form_label(row, genre)
+        composer_style, composer_style_evidence = _composer_style_label(row)
+        composer_period = _composer_period(composer_style)
         difficulty_label = _difficulty_label(difficulty_score)
         quality_tier, quality_score, quality_evidence = _quality_label(row, genre)
         measure_count = _measure_count(row)
         if requested_genres and genre not in requested_genres:
+            continue
+        if requested_composers and composer_style not in requested_composers:
             continue
         if difficulty and difficulty_label != difficulty:
             continue
@@ -168,8 +177,16 @@ def prepare_manifest(
                 "work_id": work_id,
                 "split": _split(work_id),
                 "path": _score_path(row),
+                "native_midi_path": _midi_path(row),
+                "source_dataset": "PDMX",
+                "source_license": row.get("license") or "",
+                "source_license_url": row.get("license_url") or "",
                 "title": row.get("title") or row.get("song_name") or "",
                 "composer": row.get("composer") or row.get("composer_name") or "",
+                "composer_style": composer_style,
+                "composer_period": composer_period,
+                "composer_style_evidence": composer_style_evidence,
+                "style_tags": _style_tags(composer_style, composer_period, genre),
                 "measure_count": measure_count,
                 "genre": genre,
                 "genre_evidence": genre_evidence,
@@ -192,7 +209,7 @@ def prepare_manifest(
     manifest_path = output_dir / "pdmx_score_first_manifest.jsonl"
     _write_jsonl(manifest_path, accepted)
     summary = {
-        "pipeline": "score-first-pdmx-labeling-v2",
+        "pipeline": "score-first-pdmx-labeling-v3",
         "input_rows": len(rows),
         "eligible_deduplicated_no_license_conflict_solo_piano_works": len(eligible),
         "accepted_unique_solo_piano_works": len(accepted),
@@ -201,10 +218,13 @@ def prepare_manifest(
         "test": sum(row["split"] == "test" for row in accepted),
         "genre_counts": dict(sorted(Counter(row["genre"] for row in accepted).items())),
         "form_counts": dict(sorted(Counter(row["form"] for row in accepted).items())),
+        "composer_style_counts": dict(sorted(Counter(row["composer_style"] for row in accepted).items())),
+        "composer_period_counts": dict(sorted(Counter(row["composer_period"] for row in accepted).items())),
         "difficulty_counts": dict(sorted(Counter(row["difficulty"] for row in accepted).items())),
         "quality_counts": dict(sorted(Counter(row["quality_tier"] for row in accepted).items())),
         "filters": {
             "genres": sorted(requested_genres),
+            "composers": sorted(requested_composers),
             "difficulty": difficulty,
             "quality": quality,
             "min_measures": min_measures,
@@ -270,8 +290,10 @@ def _is_solo_piano(row: Dict[str, str]) -> bool:
         return _truthy(row["is_solo_piano"])
     tracks = str(row.get("tracks", "")).strip()
     if tracks:
-        # PDMX encodes General MIDI programs with "-" separators. Program 0 is piano.
-        return tracks == "0"
+        # PDMX encodes General MIDI programs with "-" separators. Multiple
+        # program-0 tracks can represent staves or voices in one piano score.
+        programs = tracks.split("-")
+        return all(program == "0" for program in programs) and not _explicit_multi_piano_title(row)
     text = " ".join(
         str(row.get(key, ""))
         for key in ("instrumentation", "instruments", "instrument", "is_piano")
@@ -315,6 +337,35 @@ def _form_label(row: Dict[str, str], genre: str) -> Tuple[str, Dict[str, str]]:
     if genre == "minuet":
         return "ternary", {"field": "genre", "matched": genre, "policy": "genre-heuristic"}
     return "free-sectional", {"field": "", "matched": "", "policy": "conservative-default"}
+
+
+def _composer_style_label(row: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
+    field = "composer" if row.get("composer") else "composer_name"
+    composer = _normalize_text(row.get(field, ""))
+    for style in CANONICAL_CLASSICAL_COMPOSERS:
+        if _phrase_present(composer, style):
+            return style, {
+                "field": field,
+                "matched": style,
+                "policy": "canonical-surname-metadata",
+            }
+    return "unclassified-composer", {
+        "field": field,
+        "matched": "",
+        "policy": "conservative-default",
+    }
+
+
+def _composer_period(composer_style: str) -> str:
+    return COMPOSER_STYLE_PERIODS.get(composer_style, "unclassified-period")
+
+
+def _style_tags(composer_style: str, composer_period: str, genre: str) -> List[str]:
+    return [
+        f"composer-style:{composer_style}",
+        f"period:{composer_period}",
+        f"genre:{genre}",
+    ]
 
 
 def _normalize_text(value: Any) -> str:
@@ -420,13 +471,20 @@ def _tasks_for_quality(tier: str) -> List[str]:
 
 
 def _canonical_classical_composer(row: Dict[str, str]) -> bool:
-    composer = _normalize_text(row.get("composer") or row.get("composer_name") or "")
-    return any(_phrase_present(composer, pattern) for pattern in CANONICAL_CLASSICAL_COMPOSERS)
+    return _composer_style_label(row)[0] != "unclassified-composer"
 
 
 def _piano_native_title(row: Dict[str, str]) -> bool:
     title = _normalize_text(row.get("title") or row.get("song_name") or "")
     return not any(_phrase_present(title, _normalize_text(marker)) for marker in ARRANGEMENT_TITLE_MARKERS)
+
+
+def _explicit_multi_piano_title(row: Dict[str, str]) -> bool:
+    text = " ".join(
+        _normalize_text(row.get(field, ""))
+        for field in ("title", "song_name", "subtitle", "tags", "groups")
+    )
+    return any(_phrase_present(text, _normalize_text(marker)) for marker in MULTI_PIANO_TITLE_MARKERS)
 
 
 def _known_composer(row: Dict[str, str]) -> bool:
@@ -463,6 +521,15 @@ def _score_path(row: Dict[str, str]) -> str:
         or row.get("mxl_path")
         or row.get("musicxml_path")
         or row.get("path")
+        or ""
+    )
+
+
+def _midi_path(row: Dict[str, str]) -> str:
+    return str(
+        row.get("mid")
+        or row.get("midi")
+        or row.get("midi_path")
         or ""
     )
 
@@ -504,6 +571,7 @@ def main() -> None:
     parser.add_argument("--metadata-csv", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--genres", help="Comma-separated inferred genres to retain")
+    parser.add_argument("--composers", help="Comma-separated canonical composer style tags to retain")
     parser.add_argument("--difficulty", choices=DIFFICULTY_LABELS)
     parser.add_argument("--quality", choices=QUALITY_FILTERS)
     parser.add_argument("--min-measures", type=int)
@@ -511,10 +579,12 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     genres = tuple(part.strip() for part in args.genres.split(",") if part.strip()) if args.genres else ()
+    composers = tuple(part.strip() for part in args.composers.split(",") if part.strip()) if args.composers else ()
     summary = prepare_manifest(
         args.metadata_csv,
         args.output_dir,
         genres=genres,
+        composers=composers,
         difficulty=args.difficulty,
         quality=args.quality,
         min_measures=args.min_measures,
