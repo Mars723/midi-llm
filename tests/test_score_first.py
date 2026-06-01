@@ -214,6 +214,25 @@ class ScoreFirstTest(unittest.TestCase):
                 allow_terminal_empty=False,
             )
 
+    def test_short_checkpoint_fragment_rejects_invalid_note_fields(self):
+        score, _ = self.build_score()
+        rows = ['SCORE ["compact-measure-interleaved-v3"]']
+        for measure in range(1, 5):
+            rows.append(f"MEASURE [{measure}]")
+            staff = 45 if measure == 2 else 1
+            rows.append(f"NOTE [{measure},0.0,1.0,{60 + measure},{staff},1,null,null,false,false]")
+            rows.append(f"NOTE [{measure},0.0,1.0,{48 + measure},2,1,null,null,false,false]")
+        rows.append("END_SCORE")
+        with self.assertRaisesRegex(ValueError, "invalid staff 45"):
+            _score_fragment_from_continuation(
+                "\n".join(rows),
+                score.plan,
+                score.motif_bank,
+                "training_runs/test/adapter",
+                [1, 4],
+                allow_terminal_empty=False,
+            )
+
     def test_checkpoint_continuation_rejects_short_periodic_measure_loop(self):
         score, _ = self.build_score()
         rows = ['SCORE ["compact-measure-interleaved-v3"]']

@@ -590,7 +590,7 @@ def _score_fragment_from_continuation(
         },
     )
     realized_measures = {note.measure for note in score.notes}
-    errors = []
+    errors = validate_score(score)
     if start_measure not in realized_measures:
         errors.append(f"Generated fragment does not realize opening measure {start_measure}")
     if end_measure not in realized_measures and not (allow_terminal_empty and end_measure - 1 in realized_measures):
