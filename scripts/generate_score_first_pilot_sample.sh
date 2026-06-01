@@ -29,6 +29,7 @@ python -m midi_llm.generate_checkpoint \
   --top-p "${MIDI_LLM_SAMPLE_TOP_P:-0.95}" \
   --repetition-penalty "${MIDI_LLM_SAMPLE_REPETITION_PENALTY:-1.01}" \
   --max-section-new-tokens "${MIDI_LLM_SAMPLE_MAX_SECTION_NEW_TOKENS:-8192}" \
+  --max-expansion-measures "${MIDI_LLM_SAMPLE_MAX_EXPANSION_MEASURES:-16}" \
   --skip-musescore \
   --output-dir "$OUTPUT"
 

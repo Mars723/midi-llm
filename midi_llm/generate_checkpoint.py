@@ -317,97 +317,109 @@ def _sample_hierarchical_score(
     for section_index, section in enumerate(plan.sections, start=1):
         if section.label in completed_section_labels:
             continue
-        partial = PianoScoreIR(
-            plan=plan,
-            motif_bank=motif_bank,
-            notes=notes,
-            directions=directions,
-            layout_hints=layout_hints,
-        )
-        fragments = []
-        repairable_fragments = []
-        fragment_failures = []
-        for attempt in range(1, args.section_candidates + 1):
-            attempt_seed = seed + (section_index - 1) * 100 + attempt - 1
-            try:
-                continuation = _sample_model_continuation(
-                    _section_model_input(plan, motif_bank, section, partial),
-                    section.start_measure,
-                    section.end_measure,
-                    tokenizer,
-                    model,
-                    torch,
-                    args,
-                    candidate_dir
-                    / f"candidate_{candidate_number}.section_{section_index}.attempt_{attempt}.raw.dsl",
-                    attempt_seed,
-                    f"Candidate {candidate_number} section {section.label} attempt {attempt}",
-                    args.max_section_new_tokens,
-                )
-                fragment = _score_fragment_from_continuation(
-                    continuation,
-                    plan,
-                    motif_bank,
-                    adapter_dir,
-                    [section.start_measure, section.end_measure],
-                    allow_terminal_empty=section_index == len(plan.sections),
-                )
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-                if section_index == len(plan.sections) and "planned tonic" in str(error):
-                    try:
-                        fragment = _score_fragment_from_continuation(
-                            continuation,
-                            plan,
-                            motif_bank,
-                            adapter_dir,
-                            [section.start_measure, section.end_measure],
-                            allow_terminal_empty=True,
-                            require_terminal_tonic=False,
-                        )
-                    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                        pass
-                    else:
-                        repairable_fragments.append(
-                            (_fragment_quality_score(fragment) - 12, attempt, attempt_seed, fragment)
-                        )
-                fragment_failures.append({"attempt": attempt, "seed": attempt_seed, "reason": str(error)})
-                continue
-            fragments.append((_fragment_quality_score(fragment), attempt, attempt_seed, fragment))
-        if not fragments and repairable_fragments:
-            fragments = repairable_fragments
-            cadence_repair_required = True
-        if not fragments:
-            raise ValueError(
-                f"Candidate {candidate_number} section {section.label} produced no valid alternatives: "
-                f"{json.dumps(fragment_failures, sort_keys=True)}"
+        expansion_ranges = _section_expansion_ranges(section, args.max_expansion_measures)
+        for expansion_index, target_range in enumerate(expansion_ranges, start=1):
+            partial = PianoScoreIR(
+                plan=plan,
+                motif_bank=motif_bank,
+                notes=notes,
+                directions=directions,
+                layout_hints=layout_hints,
             )
-        quality_score, selected_attempt, selected_seed, fragment = max(
-            fragments,
-            key=lambda item: (item[0], -item[1]),
-        )
-        print(
-            f"Candidate {candidate_number} section {section.label} selected attempt {selected_attempt} "
-            f"seed={selected_seed} quality={quality_score:.3f}",
-            flush=True,
-        )
-        for note in fragment.notes:
-            note.id = f"model-note-{len(notes) + 1}"
-            notes.append(note)
-        directions.extend(fragment.directions)
-        layout_hints.extend(fragment.layout_hints)
-        section_completions.append(fragment.metadata["decode_completion"])
-        section_selections.append(
-            {
-                "label": section.label,
-                "attempt": selected_attempt,
-                "seed": selected_seed,
-                "quality_score": quality_score,
-                "valid_alternatives": len(fragments),
-                "failed_alternatives": fragment_failures,
-                "cadence_repair_required": cadence_repair_required and section_index == len(plan.sections),
-            }
-        )
-        skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
+            terminal_expansion = section_index == len(plan.sections) and expansion_index == len(expansion_ranges)
+            fragments = []
+            repairable_fragments = []
+            fragment_failures = []
+            for attempt in range(1, args.section_candidates + 1):
+                attempt_seed = seed + (section_index - 1) * 1000 + (expansion_index - 1) * 100 + attempt - 1
+                try:
+                    continuation = _sample_model_continuation(
+                        _section_model_input(plan, motif_bank, section, partial, target_range),
+                        target_range[0],
+                        target_range[1],
+                        tokenizer,
+                        model,
+                        torch,
+                        args,
+                        candidate_dir
+                        / (
+                            f"candidate_{candidate_number}.section_{section_index}."
+                            f"expansion_{expansion_index}.attempt_{attempt}.raw.dsl"
+                        ),
+                        attempt_seed,
+                        (
+                            f"Candidate {candidate_number} section {section.label} "
+                            f"range {target_range[0]}-{target_range[1]} attempt {attempt}"
+                        ),
+                        args.max_section_new_tokens,
+                    )
+                    fragment = _score_fragment_from_continuation(
+                        continuation,
+                        plan,
+                        motif_bank,
+                        adapter_dir,
+                        target_range,
+                        allow_terminal_empty=terminal_expansion,
+                    )
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                    if terminal_expansion and "planned tonic" in str(error):
+                        try:
+                            fragment = _score_fragment_from_continuation(
+                                continuation,
+                                plan,
+                                motif_bank,
+                                adapter_dir,
+                                target_range,
+                                allow_terminal_empty=True,
+                                require_terminal_tonic=False,
+                            )
+                        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                            pass
+                        else:
+                            repairable_fragments.append(
+                                (_fragment_quality_score(fragment) - 12, attempt, attempt_seed, fragment)
+                            )
+                    fragment_failures.append({"attempt": attempt, "seed": attempt_seed, "reason": str(error)})
+                    continue
+                fragments.append((_fragment_quality_score(fragment), attempt, attempt_seed, fragment))
+            if not fragments and repairable_fragments:
+                fragments = repairable_fragments
+                cadence_repair_required = True
+            if not fragments:
+                raise ValueError(
+                    f"Candidate {candidate_number} section {section.label} range "
+                    f"{target_range[0]}-{target_range[1]} produced no valid alternatives: "
+                    f"{json.dumps(fragment_failures, sort_keys=True)}"
+                )
+            quality_score, selected_attempt, selected_seed, fragment = max(
+                fragments,
+                key=lambda item: (item[0], -item[1]),
+            )
+            print(
+                f"Candidate {candidate_number} section {section.label} range "
+                f"{target_range[0]}-{target_range[1]} selected attempt {selected_attempt} "
+                f"seed={selected_seed} quality={quality_score:.3f}",
+                flush=True,
+            )
+            for note in fragment.notes:
+                note.id = f"model-note-{len(notes) + 1}"
+                notes.append(note)
+            directions.extend(fragment.directions)
+            layout_hints.extend(fragment.layout_hints)
+            section_completions.append(fragment.metadata["decode_completion"])
+            section_selections.append(
+                {
+                    "label": section.label,
+                    "target_range": target_range,
+                    "attempt": selected_attempt,
+                    "seed": selected_seed,
+                    "quality_score": quality_score,
+                    "valid_alternatives": len(fragments),
+                    "failed_alternatives": fragment_failures,
+                    "cadence_repair_required": cadence_repair_required and terminal_expansion,
+                }
+            )
+            skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
         completed_section_labels.append(section.label)
         write_json(
             candidate_dir / f"candidate_{candidate_number}.partial_after_{section_index}.score.ir.json",
@@ -452,6 +464,17 @@ def _sample_hierarchical_score(
     return score
 
 
+def _section_expansion_ranges(section, max_measures: int) -> List[List[int]]:
+    """Split a planned section into bounded local windows while retaining the full plan."""
+
+    if max_measures < 1:
+        raise ValueError("max_expansion_measures must be at least 1")
+    return [
+        [start, min(start + max_measures - 1, section.end_measure)]
+        for start in range(section.start_measure, section.end_measure + 1, max_measures)
+    ]
+
+
 def _resume_hierarchical_score(path: str | None, plan: PiecePlanIR, motif_bank: MotifBank) -> PianoScoreIR:
     if not path:
         return PianoScoreIR(plan=plan, motif_bank=motif_bank, notes=[], directions=[])
@@ -485,18 +508,26 @@ def _fragment_quality_score(score: PianoScoreIR) -> float:
     )
 
 
-def _section_model_input(plan, motif_bank, section, partial_score: PianoScoreIR) -> Dict[str, Any]:
+def _section_model_input(
+    plan,
+    motif_bank,
+    section,
+    partial_score: PianoScoreIR,
+    target_range: List[int] | None = None,
+) -> Dict[str, Any]:
+    target_range = target_range or [section.start_measure, section.end_measure]
     model_input = _whole_piece_model_input(plan, motif_bank)
     model_input.update(
         {
             "instruction": "Expand the target section while respecting the full plan, motifs, neighbors, and ending target.",
-            "target_range": [section.start_measure, section.end_measure],
-            "left_neighbor_scoredsl": _left_neighbor_scoredsl(partial_score, section.start_measure),
+            "target_range": target_range,
+            "left_neighbor_scoredsl": _left_neighbor_scoredsl(partial_score, target_range[0]),
             "right_neighbor_scoredsl": None,
             "active_section": {
                 "label": section.label,
                 "role": section.role,
-                "range": [section.start_measure, section.end_measure],
+                "range": target_range,
+                "planned_section_range": [section.start_measure, section.end_measure],
                 "motif_refs": section.motif_refs,
                 "cadence": section.cadence,
             },
@@ -892,6 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-score-ir")
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--max-section-new-tokens", type=int, default=8192)
+    parser.add_argument("--max-expansion-measures", type=int, default=16)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")
     return parser
@@ -908,6 +940,8 @@ def main() -> None:
         raise SystemExit("--candidates must be at least 1")
     if args.section_candidates < 1:
         raise SystemExit("--section-candidates must be at least 1")
+    if args.max_expansion_measures < 1:
+        raise SystemExit("--max-expansion-measures must be at least 1")
     output_dir = generate_from_checkpoint(args)
     print(f"Checkpoint piece written to {output_dir.resolve()}")
     print(f"Gallery: {(output_dir / 'gallery.html').resolve()}")

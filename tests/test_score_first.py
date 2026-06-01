@@ -33,6 +33,7 @@ from midi_llm.generate_checkpoint import (
     _resume_hierarchical_score,
     _rewrite_final_tonic_cadence,
     _sanitize_model_directions,
+    _section_expansion_ranges,
     _section_model_input,
     _score_from_continuation,
     _whole_piece_model_input,
@@ -211,6 +212,7 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(args.strategy, "hierarchical")
         self.assertEqual(args.section_candidates, 2)
         self.assertEqual(args.max_section_new_tokens, 8192)
+        self.assertEqual(args.max_expansion_measures, 16)
 
     def test_section_model_input_carries_global_plan_and_left_neighbor(self):
         score, _ = self.build_score()
@@ -222,6 +224,14 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(second_input["piece_plan"]["measure_count"], score.plan.measure_count)
         self.assertIn("MEASURE", second_input["left_neighbor_scoredsl"])
         self.assertEqual(second_input["active_section"]["label"], second.label)
+
+    def test_long_sections_split_into_bounded_expansion_ranges(self):
+        score, _ = self.build_score()
+        section = score.plan.sections[0]
+        self.assertEqual(
+            _section_expansion_ranges(section, 16),
+            [[section.start_measure, section.start_measure + 15], [section.start_measure + 16, section.end_measure]],
+        )
 
     def test_hierarchical_resume_reuses_completed_section_prefix(self):
         score, _ = self.build_score()
