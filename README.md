@@ -30,10 +30,10 @@ python -m midi_llm.native_backbone \
   --output-dir generated_native_backbone/nocturne_parity
 ```
 
-See [`docs/ARCHITECTURE_CORRECTION.md`](docs/ARCHITECTURE_CORRECTION.md). The
-direct ScoreDSL composition path below remains an experimental contract and
-research baseline. It is not a demonstrated quality successor to upstream
-MIDI-LLM.
+See [`docs/ARCHITECTURE_CORRECTION.md`](docs/ARCHITECTURE_CORRECTION.md) and
+[`docs/NATIVE_BACKBONE_ROADMAP.md`](docs/NATIVE_BACKBONE_ROADMAP.md). The direct
+ScoreDSL composition path below remains an experimental contract and research
+baseline. It is not a demonstrated quality successor to upstream MIDI-LLM.
 
 Generate and inspect a deterministic score-contract baseline:
 

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from html import escape
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .import_midi import import_draft
+from .import_midi import ParsedMidi, import_draft, parse_midi
 from .native_tokens import (
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
     normalize_native_model_tokens,
@@ -73,12 +75,23 @@ def generate_native_backbone(config: NativeBackboneConfig) -> Path:
             _write_json(candidate_dir / "native.tokens.json", event_tokens)
             _write_json(candidate_dir / "native.model_tokens.json", model_token_ids)
             midi_path = _write_native_midi(event_tokens, candidate_dir / "native.mid")
+            stats = native_midi_stats(parse_midi(midi_path))
+            hit_max_token_budget = (
+                len(model_token_ids) >= config.max_tokens
+                and normalization["stop_model_token_id"] is None
+            )
             row: Dict[str, Any] = {
                 "candidate": index,
                 "seed": seed,
                 "native_midi": str(midi_path.relative_to(output_dir)),
                 "native_tokens": str((candidate_dir / "native.tokens.json").relative_to(output_dir)),
                 "normalization": normalization,
+                "stats": {
+                    **stats,
+                    "generated_model_tokens": len(model_token_ids),
+                    "hit_max_token_budget": hit_max_token_budget,
+                    "natural_stop_detected": not hit_max_token_budget,
+                },
                 "score_draft": None,
                 "score_draft_error": None,
             }
@@ -91,7 +104,7 @@ def generate_native_backbone(config: NativeBackboneConfig) -> Path:
                 else:
                     row["score_draft"] = str(score_draft_dir.relative_to(output_dir))
             candidates.append(row)
-        except (OSError, RuntimeError, ValueError) as error:
+        except (AssertionError, OSError, RuntimeError, ValueError) as error:
             failures.append({"candidate": index, "seed": seed, "reason": str(error)})
     if not candidates:
         _write_json(output_dir / "failures.json", failures)
@@ -123,6 +136,60 @@ def native_backbone_manifest(
         "candidates": candidates,
         "failures": failures,
     }
+
+
+def native_midi_stats(parsed: ParsedMidi) -> Dict[str, Any]:
+    """Summarize native MIDI content without treating a draft score as ground truth."""
+
+    pitches = [note.pitch for note in parsed.notes]
+    final_tick = max((note.tick + note.duration for note in parsed.notes), default=0)
+    measures = max(1, math.ceil(final_tick / parsed.ticks_per_beat / parsed.meter.quarter_beats))
+    duration_seconds = _duration_seconds(parsed, final_tick)
+    onset_counts = Counter(note.tick for note in parsed.notes)
+    max_active_notes = _max_active_notes(parsed)
+    notes_per_second = len(parsed.notes) / max(1.0, duration_seconds)
+    return {
+        "notes": len(parsed.notes),
+        "duration_seconds": round(duration_seconds, 3),
+        "estimated_measures": measures,
+        "pitch_range": [min(pitches), max(pitches)] if pitches else [],
+        "distinct_pitches": len(set(pitches)),
+        "tempo_events": len(parsed.tempos),
+        "pedal_events": len(parsed.pedal),
+        "notes_per_second": round(notes_per_second, 3),
+        "max_notes_at_onset": max(onset_counts.values(), default=0),
+        "max_active_notes": max_active_notes,
+        "potential_density_drift": (
+            notes_per_second > 24
+            or max(onset_counts.values(), default=0) > 32
+            or max_active_notes > 64
+        ),
+    }
+
+
+def _duration_seconds(parsed: ParsedMidi, final_tick: int) -> float:
+    tempos = [tempo for tempo in parsed.tempos if tempo.tick <= final_tick]
+    if not tempos:
+        return final_tick / parsed.ticks_per_beat * 0.5
+    elapsed = 0.0
+    for index, tempo in enumerate(tempos):
+        next_tick = tempos[index + 1].tick if index + 1 < len(tempos) else final_tick
+        elapsed += max(0, next_tick - tempo.tick) / parsed.ticks_per_beat * 60 / tempo.bpm
+    return elapsed
+
+
+def _max_active_notes(parsed: ParsedMidi) -> int:
+    active = 0
+    maximum = 0
+    note_boundaries = [
+        boundary
+        for note in parsed.notes
+        for boundary in ((note.tick, 1), (note.tick + note.duration, -1))
+    ]
+    for _, delta in sorted(note_boundaries, key=lambda boundary: (boundary[0], boundary[1])):
+        active += delta
+        maximum = max(maximum, active)
+    return maximum
 
 
 def _load_upstream_model(model_path: str):
@@ -187,11 +254,15 @@ def _write_index(output_dir: Path, manifest: Dict[str, Any]) -> None:
     rows = []
     for candidate in manifest["candidates"]:
         draft = candidate.get("score_draft")
+        stats = candidate["stats"]
         draft_link = f'<a href="{escape(draft)}/gallery.html">draft score gallery</a>' if draft else "draft unavailable"
         rows.append(
             "<li>"
             f'<a href="{escape(candidate["native_midi"])}">candidate {candidate["candidate"]} native.mid</a>'
             f" | {draft_link}"
+            f" | {stats['duration_seconds']:.1f}s"
+            f" | {stats['notes']} notes"
+            f" | hit token budget: {str(stats['hit_max_token_budget']).lower()}"
             "</li>"
         )
     html = f"""<!doctype html>

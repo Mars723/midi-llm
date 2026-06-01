@@ -42,11 +42,17 @@ from midi_llm.generate_checkpoint import (
     _whole_piece_model_input,
     build_parser as build_checkpoint_parser,
 )
-from midi_llm.import_midi import draft_from_parsed, parse_midi, select_structural_tempos
+from midi_llm.import_midi import MidiNote, ParsedMidi, TempoPoint, draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_training import materialize_training_dataset
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from midi_llm.musicxml_score import import_musicxml_score
-from midi_llm.native_backbone import NativeBackboneConfig, native_backbone_manifest, upstream_generation_prompt
+from midi_llm.native_backbone import (
+    NativeBackboneConfig,
+    generate_native_backbone,
+    native_backbone_manifest,
+    native_midi_stats,
+    upstream_generation_prompt,
+)
 from midi_llm.native_tokens import (
     LLAMA_VOCAB_SIZE,
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
@@ -116,6 +122,64 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(manifest["adapter"], None)
         self.assertTrue(manifest["native_midi_is_authoritative_musical_content"])
         self.assertTrue(manifest["score_conversion_is_draft_only"])
+
+    def test_native_backbone_stats_measure_native_content_without_score_claims(self):
+        parsed = ParsedMidi(
+            ticks_per_beat=480,
+            notes=[
+                MidiNote(tick=0, duration=480, pitch=48, velocity=72),
+                MidiNote(tick=1920, duration=480, pitch=72, velocity=80),
+            ],
+            tempos=[TempoPoint(tick=0, bpm=120), TempoPoint(tick=1920, bpm=60)],
+            pedal=[],
+            meter=ComposeControls().meter,
+        )
+        self.assertEqual(
+            native_midi_stats(parsed),
+            {
+                "notes": 2,
+                "duration_seconds": 3.0,
+                "estimated_measures": 2,
+                "pitch_range": [48, 72],
+                "distinct_pitches": 2,
+                "tempo_events": 2,
+                "pedal_events": 0,
+                "notes_per_second": 0.667,
+                "max_notes_at_onset": 1,
+                "max_active_notes": 1,
+                "potential_density_drift": False,
+            },
+        )
+
+    def test_native_backbone_keeps_valid_candidate_when_another_native_stream_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "native"
+            model_tokens = [LLAMA_VOCAB_SIZE + 1, LLAMA_VOCAB_SIZE + 2, LLAMA_VOCAB_SIZE + 3]
+            with (
+                patch("midi_llm.native_backbone._load_upstream_model", return_value=(None, None, None)),
+                patch("midi_llm.native_backbone._sample_native_model_tokens", return_value=model_tokens),
+                patch(
+                    "midi_llm.native_backbone._write_native_midi",
+                    side_effect=[output_dir / "candidate_1" / "native.mid", AssertionError("bad native stream")],
+                ),
+                patch("midi_llm.native_backbone.parse_midi", return_value=None),
+                patch(
+                    "midi_llm.native_backbone.native_midi_stats",
+                    return_value={"notes": 1, "duration_seconds": 1.0},
+                ),
+            ):
+                generate_native_backbone(
+                    NativeBackboneConfig(
+                        prompt="A solo piano nocturne.",
+                        output_dir=str(output_dir),
+                        n_outputs=2,
+                        max_tokens=3,
+                        score_draft=False,
+                    )
+                )
+            manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(manifest["candidates"]), 1)
+            self.assertEqual(manifest["failures"], [{"candidate": 2, "seed": 24, "reason": "bad native stream"}])
 
     def test_scoredsl_round_trip(self):
         score, _ = self.build_score()

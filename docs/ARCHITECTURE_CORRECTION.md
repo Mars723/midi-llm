@@ -59,3 +59,7 @@ archive.
 
 The previous direct ScoreDSL adapter remains available for research comparison,
 but it is not the default quality path.
+
+See [`NATIVE_BACKBONE_ROADMAP.md`](NATIVE_BACKBONE_ROADMAP.md) for the
+evidence-based completion, form, emotion, performance, and score-conversion
+stages.
