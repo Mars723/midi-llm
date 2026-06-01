@@ -30,6 +30,7 @@ from midi_llm.generate_checkpoint import (
     _ending_fragment_has_tonic,
     _fragment_quality_score,
     _measure_event_budget_exceeded,
+    _normalize_model_note_event,
     _resume_hierarchical_score,
     _rewrite_final_tonic_cadence,
     _sanitize_model_directions,
@@ -159,6 +160,17 @@ class ScoreFirstTest(unittest.TestCase):
         decoded = _score_from_continuation(continuation, score.plan, score.motif_bank, "training_runs/test/adapter")
         self.assertEqual(decoded.metadata["skipped_malformed_optional_rows"], 2)
         self.assertEqual(len(decoded.notes), len(score.notes))
+
+    def test_checkpoint_note_normalizer_fills_only_deterministic_defaults(self):
+        normalized, count = _normalize_model_note_event("NOTE [1,0.0,0.5,48,2,null,null,false,false]")
+        self.assertEqual(normalized, "NOTE [1,0.0,0.5,48,2,1,null,null,false,false]")
+        self.assertEqual(count, 1)
+        normalized, count = _normalize_model_note_event("NOTE [1,0.0,0.5,48,2,1,null,null]")
+        self.assertEqual(normalized, "NOTE [1,0.0,0.5,48,2,1,null,null,false,false]")
+        self.assertEqual(count, 1)
+        unchanged, count = _normalize_model_note_event("NOTE [1,0.0,broken]")
+        self.assertEqual(unchanged, "NOTE [1,0.0,broken]")
+        self.assertEqual(count, 0)
 
     def test_checkpoint_continuation_trims_one_empty_terminal_measure(self):
         score, _ = self.build_score()

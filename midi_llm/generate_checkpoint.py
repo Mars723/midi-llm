@@ -178,6 +178,7 @@ def generate_from_checkpoint(args: argparse.Namespace) -> Path:
         "candidate_failures": failures,
         "decode_completion": score.metadata.get("decode_completion"),
         "skipped_malformed_optional_rows": score.metadata.get("skipped_malformed_optional_rows", 0),
+        "normalized_model_note_rows": score.metadata.get("normalized_model_note_rows", 0),
         "trimmed_empty_trailing_measures": score.metadata.get("trimmed_empty_trailing_measures", 0),
         "prompt": args.prompt,
         "controls": asdict(controls),
@@ -313,6 +314,7 @@ def _sample_hierarchical_score(
     section_completions = list(resume_score.metadata.get("section_decode_completions", []))
     section_selections = list(resume_score.metadata.get("section_selections", []))
     skipped_optional_rows = resume_score.metadata.get("skipped_malformed_optional_rows", 0)
+    normalized_note_rows = resume_score.metadata.get("normalized_model_note_rows", 0)
     cadence_repair_required = False
     for section_index, section in enumerate(plan.sections, start=1):
         if section.label in completed_section_labels:
@@ -420,6 +422,7 @@ def _sample_hierarchical_score(
                 }
             )
             skipped_optional_rows += fragment.metadata["skipped_malformed_optional_rows"]
+            normalized_note_rows += fragment.metadata["normalized_model_note_rows"]
         completed_section_labels.append(section.label)
         write_json(
             candidate_dir / f"candidate_{candidate_number}.partial_after_{section_index}.score.ir.json",
@@ -434,6 +437,7 @@ def _sample_hierarchical_score(
                     "section_decode_completions": section_completions,
                     "section_selections": section_selections,
                     "skipped_malformed_optional_rows": skipped_optional_rows,
+                    "normalized_model_note_rows": normalized_note_rows,
                 },
             ),
         )
@@ -451,6 +455,7 @@ def _sample_hierarchical_score(
             "section_decode_completions": section_completions,
             "section_selections": section_selections,
             "skipped_malformed_optional_rows": skipped_optional_rows,
+            "normalized_model_note_rows": normalized_note_rows,
             "generation_strategy": "hierarchical",
         },
     )
@@ -564,7 +569,10 @@ def _score_fragment_from_continuation(
     require_terminal_tonic: bool = True,
 ) -> PianoScoreIR:
     start_measure, end_measure = target_range
-    finalized, decode_completion, skipped_optional_rows = _finalize_model_continuation(continuation, end_measure)
+    finalized, decode_completion, skipped_optional_rows, normalized_note_rows = _finalize_model_continuation(
+        continuation,
+        end_measure,
+    )
     score = decode_model_score(
         finalized,
         deepcopy(plan),
@@ -574,6 +582,7 @@ def _score_fragment_from_continuation(
             "adapter_dir": adapter_dir,
             "decode_completion": decode_completion,
             "skipped_malformed_optional_rows": skipped_optional_rows,
+            "normalized_model_note_rows": normalized_note_rows,
             "target_range": target_range,
         },
     )
@@ -588,6 +597,8 @@ def _score_fragment_from_continuation(
     measure_note_counts = Counter(note.measure for note in score.notes)
     if measure_note_counts and max(measure_note_counts.values()) > 64:
         errors.append("Generated fragment exceeds the per-measure notation event budget")
+    if normalized_note_rows > 4 and normalized_note_rows / max(1, len(score.notes)) > 0.15:
+        errors.append("Generated fragment requires too many deterministic NOTE normalizations")
     if allow_terminal_empty and require_terminal_tonic and not _ending_fragment_has_tonic(score):
         errors.append("Generated ending fragment does not end on the planned tonic")
     staff_coverage = staff_measure_coverage(score.notes, max(1, len(realized_measures)))
@@ -700,7 +711,7 @@ def _score_from_continuation(
     motif_bank: MotifBank,
     adapter_dir: str,
 ) -> PianoScoreIR:
-    finalized, decode_completion, skipped_optional_rows = _finalize_model_continuation(
+    finalized, decode_completion, skipped_optional_rows, normalized_note_rows = _finalize_model_continuation(
         continuation,
         plan.measure_count,
     )
@@ -713,6 +724,7 @@ def _score_from_continuation(
             "adapter_dir": adapter_dir,
             "decode_completion": decode_completion,
             "skipped_malformed_optional_rows": skipped_optional_rows,
+            "normalized_model_note_rows": normalized_note_rows,
         },
     )
     score.metadata["trimmed_empty_trailing_measures"] = _trim_single_empty_trailing_measure(score)
@@ -739,12 +751,13 @@ def _trim_single_empty_trailing_measure(score: PianoScoreIR) -> int:
     return 1
 
 
-def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str, int]:
+def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple[str, str, int, int]:
     """Use a model terminator or trim the first complete event beyond the plan."""
 
     lines = []
     completion = None
     skipped_optional_rows = 0
+    normalized_note_rows = 0
     for line in continuation.splitlines():
         if line == "END_SCORE":
             lines.append(line)
@@ -753,6 +766,8 @@ def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple
         if _is_malformed_optional_event(line):
             skipped_optional_rows += 1
             continue
+        line, normalized = _normalize_model_note_event(line)
+        normalized_note_rows += normalized
         measure = _model_event_measure(line)
         if measure is not None and measure > final_measure:
             completion = "planned-measure-boundary"
@@ -762,7 +777,33 @@ def _finalize_model_continuation(continuation: str, final_measure: int) -> Tuple
         raise ValueError("Generated ScoreDSL does not contain END_SCORE or cross the planned final measure")
     if not lines or lines[-1] != "END_SCORE":
         lines.append("END_SCORE")
-    return "\n".join(lines) + "\n", completion, skipped_optional_rows
+    return "\n".join(lines) + "\n", completion, skipped_optional_rows, normalized_note_rows
+
+
+def _normalize_model_note_event(line: str) -> Tuple[str, int]:
+    """Fill deterministic optional NOTE defaults without changing musical content."""
+
+    tag, separator, payload = line.partition(" ")
+    if not separator or tag != "NOTE":
+        return line, 0
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return line, 0
+    if not isinstance(data, list):
+        return line, 0
+    original = list(data)
+    if len(data) == 11 and isinstance(data[-1], bool):
+        data = data[:10]
+    if 6 <= len(data) < 10:
+        if not isinstance(data[5], int):
+            data.insert(5, 1)
+        if len(data) < 10 and isinstance(data[5], int):
+            defaults = [None, None, False, False]
+            data.extend(defaults[len(data) - 6 :])
+    if len(data) != 10 or data == original:
+        return line, 0
+    return f"NOTE {json.dumps(data, separators=(',', ':'))}", 1
 
 
 def _is_malformed_optional_event(line: str) -> bool:
