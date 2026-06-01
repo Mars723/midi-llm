@@ -315,6 +315,7 @@ def _sample_hierarchical_score(
     section_selections = list(resume_score.metadata.get("section_selections", []))
     skipped_optional_rows = resume_score.metadata.get("skipped_malformed_optional_rows", 0)
     normalized_note_rows = resume_score.metadata.get("normalized_model_note_rows", 0)
+    min_valid_alternatives = getattr(args, "min_valid_section_alternatives", None) or args.section_candidates
     cadence_repair_required = False
     for section_index, section in enumerate(plan.sections, start=1):
         if section.label in completed_section_labels:
@@ -384,6 +385,8 @@ def _sample_hierarchical_score(
                     fragment_failures.append({"attempt": attempt, "seed": attempt_seed, "reason": str(error)})
                     continue
                 fragments.append((_fragment_quality_score(fragment), attempt, attempt_seed, fragment))
+                if len(fragments) >= min_valid_alternatives:
+                    break
             if not fragments and repairable_fragments:
                 fragments = repairable_fragments
                 cadence_repair_required = True
@@ -961,6 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetition-penalty", type=float, default=1.01)
     parser.add_argument("--strategy", choices=("hierarchical", "single-pass"), default="hierarchical")
     parser.add_argument("--section-candidates", type=int, default=2)
+    parser.add_argument("--min-valid-section-alternatives", type=int)
     parser.add_argument("--resume-score-ir")
     parser.add_argument("--max-new-tokens", type=int, default=65536)
     parser.add_argument("--max-section-new-tokens", type=int, default=8192)
@@ -981,6 +985,10 @@ def main() -> None:
         raise SystemExit("--candidates must be at least 1")
     if args.section_candidates < 1:
         raise SystemExit("--section-candidates must be at least 1")
+    if args.min_valid_section_alternatives is None:
+        args.min_valid_section_alternatives = args.section_candidates
+    if not 1 <= args.min_valid_section_alternatives <= args.section_candidates:
+        raise SystemExit("--min-valid-section-alternatives must be between 1 and --section-candidates")
     if args.max_expansion_measures < 1:
         raise SystemExit("--max-expansion-measures must be at least 1")
     output_dir = generate_from_checkpoint(args)

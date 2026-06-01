@@ -242,6 +242,7 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(args.repetition_penalty, 1.01)
         self.assertEqual(args.strategy, "hierarchical")
         self.assertEqual(args.section_candidates, 2)
+        self.assertIsNone(args.min_valid_section_alternatives)
         self.assertEqual(args.max_section_new_tokens, 8192)
         self.assertEqual(args.max_expansion_measures, 16)
 

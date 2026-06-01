@@ -306,7 +306,9 @@ same whole-piece blueprint and motif bank plus the generated left neighbor.
 Longer planned sections expand through bounded local windows, each window
 samples two alternatives, and the compiler selects stronger local fragments
 before merging one complete score. Override this with `--section-candidates`
-and `--max-expansion-measures`. Each selected section writes a
+and `--max-expansion-measures`. For faster diagnostic samples, set
+`--min-valid-section-alternatives 1` to move on after the first locally valid
+fragment instead of ranking every configured alternative. Each selected section writes a
 `candidate_<n>.partial_after_<section>.score.ir.json` recovery point; pass one
 back through `--resume-score-ir` to retry only the remaining sections. Use
 `--strategy single-pass` only as a research comparison. Both paths reject
