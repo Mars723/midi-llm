@@ -22,7 +22,7 @@ rsync -a --delete "$RUN_ROOT/" "$BACKUP_ROOT/training_runs/$RUN_NAME/"
 
 if [[ -n "$RECOVERY_ROOT" && -d "$RECOVERY_ROOT" ]]; then
   mkdir -p "$BACKUP_ROOT/recovery"
-  rsync -a "$RECOVERY_ROOT/" "$BACKUP_ROOT/recovery/"
+  rsync -a --exclude 'rclone.conf' "$RECOVERY_ROOT/" "$BACKUP_ROOT/recovery/"
 fi
 
 {

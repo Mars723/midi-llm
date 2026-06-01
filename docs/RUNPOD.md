@@ -113,7 +113,9 @@ export MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod'
 ```
 
 Set those two exports before starting the watcher. Each backup pass will then
-sync the persistent backup directory to Google Drive as well.
+sync the persistent backup directory to Google Drive as well. The watcher
+explicitly excludes `rclone.conf` from mirrored recovery bundles so OAuth
+credentials stay only in the persistent configuration path.
 
 ## Official References
 
