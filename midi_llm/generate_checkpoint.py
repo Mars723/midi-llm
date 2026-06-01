@@ -606,9 +606,9 @@ def _score_fragment_from_continuation(
         errors.append("Generated fragment does not realize the requested two-staff piano texture")
     repetition = _measure_repetition_metrics(score)
     realized_measure_count = len(realized_measures)
-    if realized_measure_count >= 16 and repetition["unique_measure_signature_ratio"] < 0.25:
+    if realized_measure_count >= 4 and repetition["unique_measure_signature_ratio"] < 0.25:
         errors.append("Generated fragment does not contain enough unique measure content")
-    if repetition["longest_identical_measure_run"] > 8:
+    if repetition["longest_identical_measure_run"] > 4:
         errors.append("Generated fragment repeats identical measure content too many times in sequence")
     if (
         repetition["periodic_measure_loop_period"] is not None

@@ -36,6 +36,7 @@ from midi_llm.generate_checkpoint import (
     _sanitize_model_directions,
     _section_expansion_ranges,
     _section_model_input,
+    _score_fragment_from_continuation,
     _score_from_continuation,
     _whole_piece_model_input,
     build_parser as build_checkpoint_parser,
@@ -194,6 +195,24 @@ class ScoreFirstTest(unittest.TestCase):
         rows.append("END_SCORE")
         with self.assertRaisesRegex(ValueError, "identical measure content"):
             _score_from_continuation("\n".join(rows), score.plan, score.motif_bank, "training_runs/test/adapter")
+
+    def test_short_checkpoint_fragment_rejects_measure_loop(self):
+        score, _ = self.build_score()
+        rows = ['SCORE ["compact-measure-interleaved-v3"]']
+        for measure in range(1, 9):
+            rows.append(f"MEASURE [{measure}]")
+            rows.append(f"NOTE [{measure},0.0,1.0,60,1,1,null,null,false,false]")
+            rows.append(f"NOTE [{measure},0.0,1.0,48,2,1,null,null,false,false]")
+        rows.append("END_SCORE")
+        with self.assertRaisesRegex(ValueError, "enough unique measure content"):
+            _score_fragment_from_continuation(
+                "\n".join(rows),
+                score.plan,
+                score.motif_bank,
+                "training_runs/test/adapter",
+                [1, 8],
+                allow_terminal_empty=False,
+            )
 
     def test_checkpoint_continuation_rejects_short_periodic_measure_loop(self):
         score, _ = self.build_score()
