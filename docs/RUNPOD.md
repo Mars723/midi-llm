@@ -103,19 +103,20 @@ bash scripts/watch_score_first_backup.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROO
 The watcher continuously mirrors checkpoints, logs, recovery bundles, and a
 final adapter archive into `MIDI_LLM_BACKUP_ROOT`.
 
-To add offsite Google Drive backup, create a persistent `rclone`
-configuration once:
+To add offsite Google Drive backup, create an ephemeral `rclone`
+configuration on the container disk:
 
 ```bash
-rclone config --config /workspace/midillm-recovery/rclone.conf
-export RCLONE_CONFIG=/workspace/midillm-recovery/rclone.conf
+rclone config --config /root/.config/rclone/rclone.conf
+export RCLONE_CONFIG=/root/.config/rclone/rclone.conf
 export MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod'
 ```
 
 Set those two exports before starting the watcher. Each backup pass will then
 sync the persistent backup directory to Google Drive as well. The watcher
 explicitly excludes `rclone.conf` from mirrored recovery bundles so OAuth
-credentials stay only in the persistent configuration path.
+credentials do not enter the persistent backup or the Drive mirror. Recreate
+the ephemeral configuration after rebuilding a Pod.
 
 ## Official References
 
