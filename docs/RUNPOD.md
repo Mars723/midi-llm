@@ -51,6 +51,15 @@ Inspect the native MIDI candidates against the upstream Live Demo before
 training a notation editor. Converted score galleries are draft-only previews.
 See [`ARCHITECTURE_CORRECTION.md`](ARCHITECTURE_CORRECTION.md).
 
+For classical-piano specialization, use the composer-tagged upstream-native
+dataset and bounded native-token stages documented in
+[`CLASSICAL_NATIVE_DATASET.md`](CLASSICAL_NATIVE_DATASET.md):
+
+```bash
+bash scripts/run_native_classical_stages.sh dry-run
+bash scripts/run_native_classical_stages.sh smoke
+```
+
 The direct ScoreDSL adapter commands below remain available for research
 comparison. They are not the default quality path.
 

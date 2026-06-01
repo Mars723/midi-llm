@@ -82,6 +82,12 @@ from midi_llm.research_symupe import (
 from midi_llm.scoredsl import decode_score, encode_score
 from midi_llm.score_ir import NoteEvent, PianoScoreIR, ScoreDirection, read_score, validate_score, write_json
 from midi_llm.training import create_run_plan
+from midi_llm.train_native import (
+    NativeTrainConfig,
+    _spread_segments,
+    _tokenized_native_dataset,
+    build_native_training_spec,
+)
 from midi_llm.train_scoredsl import TrainConfig, _target_loss_weights, _validate_token_lengths, build_training_spec
 
 
@@ -1000,6 +1006,72 @@ class ScoreFirstTest(unittest.TestCase):
                 summary = materialize_native_training_dataset(manifest, root / "native", root, max_event_tokens=3)
             self.assertEqual(summary["examples_written"], 0)
             self.assertEqual(summary["examples_excluded_oversized"], 1)
+
+    def test_native_training_spec_caps_long_works_and_requires_parity_replay(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            tokens = root / "tokens"
+            tokens.mkdir()
+            native_segments = []
+            for index in range(1, 4):
+                path = tokens / f"work.segment-{index:03d}.model_tokens.json"
+                path.write_text(json.dumps([NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + index]), encoding="utf-8")
+                native_segments.append(
+                    {
+                        "segment": index,
+                        "start_time_token": (index - 1) * 10_000,
+                        "native_event_token_count": 1,
+                        "native_model_token_count": 2,
+                        "native_model_tokens_path": str(path.relative_to(root)),
+                    }
+                )
+            (root / "train.jsonl").write_text(
+                json.dumps(
+                    {
+                        "work_id": "work",
+                        "controls": {"composer_style": "bach", "genre": "prelude"},
+                        "upstream_prompt": "Compose a Bach prelude. ",
+                        "native_segments": native_segments,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            spec = build_native_training_spec(
+                NativeTrainConfig(
+                    dataset_dir=str(root),
+                    output_dir=str(root / "run"),
+                    max_segments_per_work=2,
+                )
+            )
+            self.assertEqual(spec["dataset"]["selected_native_segments"], 2)
+            self.assertEqual(spec["dataset"]["composer_style_counts"], {"bach": 2})
+            self.assertTrue(spec["model"]["upstream_extended_vocabulary_is_preserved"])
+            self.assertIn("adapter parity replay", spec["promotion_gate"]["required_after_each_checkpoint"])
+            self.assertEqual([row["segment"] for row in _spread_segments(native_segments, 2)], [1, 3])
+
+    def test_native_training_dataset_masks_prompt_and_midi_bos(self):
+        class FakeTokenizer:
+            eos_token_id = 99
+
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": [7, 8]}
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            tokens = Path(raw_dir) / "tokens.json"
+            tokens.write_text(
+                json.dumps([NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1]),
+                encoding="utf-8",
+            )
+            dataset = _tokenized_native_dataset(
+                [{"work_id": "work", "upstream_prompt": "Prompt ", "native_model_tokens_path": str(tokens)}],
+                FakeTokenizer(),
+                16,
+            )
+            row = dataset[0]
+            self.assertEqual(row["input_ids"], [7, 8, NATIVE_MIDI_BOS_MODEL_TOKEN_ID, LLAMA_VOCAB_SIZE + 1, 99])
+            self.assertEqual(row["labels"], [-100, -100, -100, LLAMA_VOCAB_SIZE + 1, 99])
+            self.assertEqual(row["loss_weights"], [0.0, 0.0, 0.0, 1.0, 1.0])
 
     def test_pdmx_fetch_selective_extract_rejects_escaping_members(self):
         with tempfile.TemporaryDirectory() as raw_dir:

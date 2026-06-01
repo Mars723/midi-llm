@@ -91,3 +91,26 @@ including them.
 4. Fine-tune the upstream checkpoint at low learning rate with parity replay.
 5. Reject any adapter that regresses native upstream parity before evaluating
    longer completion, emotional control, or notation conversion.
+
+Create the native QLoRA dry-run spec before allocating GPU time:
+
+```bash
+bash scripts/run_native_classical_stages.sh dry-run
+```
+
+Then run one optimizer step only:
+
+```bash
+bash scripts/run_native_classical_stages.sh smoke
+```
+
+The pilot is intentionally bounded to `100` optimizer steps at a default
+learning rate of `2e-5`:
+
+```bash
+bash scripts/run_native_classical_stages.sh pilot
+```
+
+Generate fixed-seed upstream and adapter candidates after each checkpoint.
+Reject a checkpoint if native MIDI validity, density drift, or baseline prompt
+quality regresses, even when its training loss decreases.
