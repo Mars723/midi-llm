@@ -79,6 +79,42 @@ scp -P SSH_PORT \
 
 Terminate the billed Pod after collecting the adapter and generated sample.
 
+## Persist And Back Up Training Runs
+
+Keep the repository and all training outputs on the persistent volume, such
+as `/workspace/midi-llm`. The virtual environment can stay on the faster
+container disk because it is disposable.
+
+For a long stage, save resumable checkpoints more frequently and run the
+backup watcher:
+
+```bash
+export MIDI_LLM_RUN_ROOT=/workspace/midi-llm/training_runs/score_first_intermediate_v2
+export MIDI_LLM_BACKUP_ROOT=/workspace/midillm-backups
+export MIDI_LLM_RECOVERY_ROOT=/workspace/midillm-recovery
+export MIDI_LLM_SAVE_STEPS=25
+
+mkdir -p "$MIDI_LLM_BACKUP_ROOT"
+bash scripts/run_score_first_stages.sh two-staff-refinement > "$MIDI_LLM_BACKUP_ROOT/stage09.log" 2>&1 &
+TRAINING_PID=$!
+bash scripts/watch_score_first_backup.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROOT/backup-watch.log" 2>&1 &
+```
+
+The watcher continuously mirrors checkpoints, logs, recovery bundles, and a
+final adapter archive into `MIDI_LLM_BACKUP_ROOT`.
+
+To add offsite Google Drive backup, create a persistent `rclone`
+configuration once:
+
+```bash
+rclone config --config /workspace/midillm-recovery/rclone.conf
+export RCLONE_CONFIG=/workspace/midillm-recovery/rclone.conf
+export MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod'
+```
+
+Set those two exports before starting the watcher. Each backup pass will then
+sync the persistent backup directory to Google Drive as well.
+
 ## Official References
 
 - [Runpod Pod CLI](https://docs.runpod.io/runpodctl/reference/runpodctl-pod)

@@ -32,6 +32,7 @@ run_stage() {
     --tasks "$tasks"
     --max-seq-length "$MAX_SEQ_LENGTH"
     --epochs "$epochs"
+    --save-steps "${MIDI_LLM_SAVE_STEPS:-100}"
   )
   if [[ -n "$resume_adapter" ]]; then
     args+=(--resume-adapter-dir "$resume_adapter")

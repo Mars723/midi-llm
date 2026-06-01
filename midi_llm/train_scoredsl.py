@@ -155,6 +155,8 @@ def _validate_config(config: TrainConfig) -> None:
         raise ValueError("max_steps must be -1 or positive")
     if config.gradient_accumulation_steps < 1:
         raise ValueError("gradient_accumulation_steps must be positive")
+    if config.save_steps < 1:
+        raise ValueError("save_steps must be positive")
     if config.min_variation_score is not None and not 0 <= config.min_variation_score <= 1:
         raise ValueError("min_variation_score must be between 0 and 1")
     if (
@@ -566,6 +568,7 @@ def _launch_command(config: TrainConfig) -> str:
         f" --target-prefix-tokens {config.target_prefix_tokens}"
         f" --target-prefix-weight {config.target_prefix_weight}"
         f" --epochs {config.epochs}"
+        f" --save-steps {config.save_steps}"
         f"{resume}"
         f"{tasks}"
         f"{max_examples}"
@@ -610,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
+    parser.add_argument("--save-steps", type=int, default=100, help="Persist a resumable trainer checkpoint every N steps")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -637,6 +641,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        save_steps=args.save_steps,
     )
     result = build_training_spec(config) if args.dry_run else run_training(config)
     print(json.dumps(result, indent=2))
