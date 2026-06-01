@@ -971,10 +971,19 @@ class ScoreFirstTest(unittest.TestCase):
                     dataset_dir=str(dataset),
                     output_dir=str(root / "run"),
                     resume_adapter_dir="training_runs/01_grammar/adapter",
+                    resume_checkpoint_dir="training_runs/09_two_staff_refinement/checkpoint-25",
                 )
             )
             self.assertEqual(spec["model"]["resume_adapter_dir"], "training_runs/01_grammar/adapter")
+            self.assertEqual(
+                spec["model"]["resume_checkpoint_dir"],
+                "training_runs/09_two_staff_refinement/checkpoint-25",
+            )
             self.assertIn("--resume-adapter-dir training_runs/01_grammar/adapter", spec["launch_command"])
+            self.assertIn(
+                "--resume-checkpoint-dir training_runs/09_two_staff_refinement/checkpoint-25",
+                spec["launch_command"],
+            )
             self.assertEqual(spec["model"]["loss_strategy"], "checkpointed chunked LM-head cross-entropy")
             self.assertEqual(spec["model"]["loss_chunk_tokens"], 256)
             self.assertEqual(

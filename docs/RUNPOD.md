@@ -106,6 +106,14 @@ final adapter archive into `MIDI_LLM_BACKUP_ROOT`. The post-training watcher
 also tries several seeds and mirrors the first validated complete-piece
 sample.
 
+If a Pod stops after a numbered Trainer checkpoint has been written, resume
+the exact optimizer step instead of restarting the stage:
+
+```bash
+export MIDI_LLM_RESUME_CHECKPOINT_DIR=/workspace/midi-llm/training_runs/score_first_intermediate_v2/09_two_staff_refinement/checkpoint-25
+bash scripts/run_score_first_stages.sh two-staff-refinement
+```
+
 To add offsite Google Drive backup, create an ephemeral `rclone`
 configuration on the container disk:
 

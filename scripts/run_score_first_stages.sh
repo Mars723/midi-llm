@@ -37,6 +37,9 @@ run_stage() {
   if [[ -n "$resume_adapter" ]]; then
     args+=(--resume-adapter-dir "$resume_adapter")
   fi
+  if [[ -n "${MIDI_LLM_RESUME_CHECKPOINT_DIR:-}" ]]; then
+    args+=(--resume-checkpoint-dir "$MIDI_LLM_RESUME_CHECKPOINT_DIR")
+  fi
   if [[ $# -gt 0 ]]; then
     args+=("$@")
   fi

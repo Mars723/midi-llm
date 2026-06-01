@@ -37,6 +37,7 @@ class TrainConfig:
     output_dir: str
     base_model: str = "slseanwu/MIDI-LLM_Llama-3.2-1B"
     resume_adapter_dir: str | None = None
+    resume_checkpoint_dir: str | None = None
     split: str = "train"
     tasks: Sequence[str] = ()
     max_examples: int | None = None
@@ -108,6 +109,7 @@ def build_training_spec(config: TrainConfig) -> Dict[str, Any]:
             "base_model": config.base_model,
             "adapter": "QLoRA",
             "resume_adapter_dir": config.resume_adapter_dir,
+            "resume_checkpoint_dir": config.resume_checkpoint_dir,
             "quantization": "4-bit NF4 with double quantization",
             "attention_implementation": "sdpa",
             "attention_fallback_policy": "disable quadratic math SDPA fallback on CUDA",
@@ -286,7 +288,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         train_dataset=dataset,
         data_collator=_collator(tokenizer, torch),
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=config.resume_checkpoint_dir)
     adapter_dir = Path(config.output_dir) / "adapter"
     model.save_pretrained(adapter_dir)
     tokenizer.save_pretrained(adapter_dir)
@@ -543,6 +545,9 @@ def _task_length_estimates(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
 def _launch_command(config: TrainConfig) -> str:
     tasks = f" --tasks {','.join(config.tasks)}" if config.tasks else ""
     resume = f" --resume-adapter-dir {config.resume_adapter_dir}" if config.resume_adapter_dir else ""
+    resume_checkpoint = (
+        f" --resume-checkpoint-dir {config.resume_checkpoint_dir}" if config.resume_checkpoint_dir else ""
+    )
     max_examples = f" --max-examples {config.max_examples}" if config.max_examples is not None else ""
     max_characters = (
         f" --max-example-characters {config.max_example_characters}"
@@ -570,6 +575,7 @@ def _launch_command(config: TrainConfig) -> str:
         f" --epochs {config.epochs}"
         f" --save-steps {config.save_steps}"
         f"{resume}"
+        f"{resume_checkpoint}"
         f"{tasks}"
         f"{max_examples}"
         f"{max_characters}"
@@ -593,6 +599,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--base-model", default="slseanwu/MIDI-LLM_Llama-3.2-1B")
     parser.add_argument("--resume-adapter-dir")
+    parser.add_argument("--resume-checkpoint-dir", help="Resume Trainer optimizer, scheduler, RNG, and step state")
     parser.add_argument("--split", default="train")
     parser.add_argument("--tasks", help="Comma-separated curriculum tasks; defaults to every task in the split")
     parser.add_argument("--max-examples", type=int, help="Select at most this many examples after task filtering")
@@ -625,6 +632,7 @@ def main() -> None:
         output_dir=args.output_dir,
         base_model=args.base_model,
         resume_adapter_dir=args.resume_adapter_dir,
+        resume_checkpoint_dir=args.resume_checkpoint_dir,
         split=args.split,
         tasks=tuple(task.strip() for task in args.tasks.split(",") if task.strip()) if args.tasks else (),
         max_examples=args.max_examples,
