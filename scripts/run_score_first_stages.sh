@@ -143,7 +143,7 @@ variation_repair_refinement() {
     10_variation_repair_refinement \
     section-expand-16-64,masked-span-inpaint,recapitulation-revise,section-variation-revise \
     "${MIDI_LLM_VARIATION_REPAIR_REFINEMENT_EPOCHS:-1}" \
-    "$RUN_ROOT/09_two_staff_refinement/adapter" \
+    "${MIDI_LLM_VARIATION_REPAIR_RESUME_ADAPTER_DIR:-$RUN_ROOT/09_two_staff_refinement/adapter}" \
     --min-variation-score "${MIDI_LLM_VARIATION_REPAIR_MIN_VARIATION_SCORE:-0.70}" \
     --min-lower-staff-measure-coverage "${MIDI_LLM_MIN_LOWER_STAFF_MEASURE_COVERAGE:-0.75}" \
     --gradient-accumulation-steps "${MIDI_LLM_VARIATION_REPAIR_GRADIENT_ACCUMULATION_STEPS:-8}" \

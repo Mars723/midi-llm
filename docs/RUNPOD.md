@@ -125,8 +125,14 @@ before starting the same watcher pattern:
 
 ```bash
 export MIDI_LLM_BACKUP_STAGE=10_variation_repair_refinement
+export MIDI_LLM_VARIATION_REPAIR_RESUME_ADAPTER_DIR=/root/midllm-local/09_two_staff_refinement-adapter
 bash scripts/run_score_first_stages.sh variation-repair-refinement
 ```
+
+Copy the stage 09 adapter to the disposable container disk before setting this
+override when the network-mounted persistent volume stalls on large adapter
+reads. Training checkpoints and final outputs must still use
+`MIDI_LLM_RUN_ROOT` on the persistent volume.
 
 To add offsite Google Drive backup, create an ephemeral `rclone`
 configuration on the container disk:
