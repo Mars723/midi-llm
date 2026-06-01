@@ -101,10 +101,12 @@ bash scripts/watch_score_first_backup.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROO
 bash scripts/run_score_first_post_training.sh "$TRAINING_PID" > "$MIDI_LLM_BACKUP_ROOT/post-training.log" 2>&1 &
 ```
 
-The watcher continuously mirrors checkpoints, logs, recovery bundles, and a
-final adapter archive into `MIDI_LLM_BACKUP_ROOT`. The post-training watcher
-also tries several seeds and mirrors the first validated complete-piece
-sample.
+The watcher continuously mirrors checkpoints, frozen log snapshots, recovery
+bundles, and a final adapter archive into `MIDI_LLM_BACKUP_ROOT`. Live logs
+remain in `logs/`; stable Drive copies are written from `log-snapshots/latest/`
+so an actively appended log cannot cause a self-referential sync loop. The
+post-training watcher also tries several seeds and mirrors the first validated
+complete-piece sample.
 
 If a Pod stops after a numbered Trainer checkpoint has been written, resume
 the exact optimizer step instead of restarting the stage:

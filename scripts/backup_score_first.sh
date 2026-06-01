@@ -20,6 +20,11 @@ trap 'rmdir "$LOCK_DIR"' EXIT
 mkdir -p "$BACKUP_ROOT/training_runs/$RUN_NAME" "$BACKUP_ROOT/metadata"
 rsync -a --delete "$RUN_ROOT/" "$BACKUP_ROOT/training_runs/$RUN_NAME/"
 
+if [[ -d "$BACKUP_ROOT/logs" ]]; then
+  mkdir -p "$BACKUP_ROOT/log-snapshots/latest"
+  rsync -a --delete "$BACKUP_ROOT/logs/" "$BACKUP_ROOT/log-snapshots/latest/"
+fi
+
 if [[ -n "$RECOVERY_ROOT" && -d "$RECOVERY_ROOT" ]]; then
   mkdir -p "$BACKUP_ROOT/recovery"
   rsync -a --exclude 'rclone.conf' "$RECOVERY_ROOT/" "$BACKUP_ROOT/recovery/"
@@ -43,7 +48,10 @@ fi
 
 if [[ -n "$RCLONE_REMOTE" ]]; then
   command -v rclone >/dev/null
-  rclone sync "$BACKUP_ROOT/" "$RCLONE_REMOTE/" --create-empty-src-dirs
+  rclone sync "$BACKUP_ROOT/" "$RCLONE_REMOTE/" \
+    --create-empty-src-dirs \
+    --exclude '/logs/**' \
+    --exclude '/.backup-lock/**'
 fi
 
 echo "Backup complete: $BACKUP_ROOT"
