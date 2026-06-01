@@ -240,6 +240,12 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(resumed.metadata["completed_section_labels"], [first.label])
         self.assertEqual(resumed.notes, partial.notes)
 
+    def test_hierarchical_generation_starts_from_an_empty_score(self):
+        score, _ = self.build_score()
+        initial = _resume_hierarchical_score(None, score.plan, score.motif_bank)
+        self.assertEqual(initial.notes, [])
+        self.assertEqual(initial.directions, [])
+
     def test_ending_fragment_requires_planned_tonic(self):
         score, _ = self.build_score()
         self.assertTrue(_ending_fragment_has_tonic(score))

@@ -452,7 +452,7 @@ def _sample_hierarchical_score(
 
 def _resume_hierarchical_score(path: str | None, plan: PiecePlanIR, motif_bank: MotifBank) -> PianoScoreIR:
     if not path:
-        return PianoScoreIR(plan=plan, motif_bank=motif_bank)
+        return PianoScoreIR(plan=plan, motif_bank=motif_bank, notes=[], directions=[])
     score = read_score(path)
     if score.plan != plan:
         raise ValueError("Resume score plan does not match requested whole-piece plan")
