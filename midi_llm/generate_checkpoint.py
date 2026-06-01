@@ -261,6 +261,7 @@ def _sample_model_continuation(
     raw_path: Path,
     seed: int,
     label: str,
+    max_new_tokens: int | None = None,
 ) -> str:
     generation_prefix = model_score_generation_prefix(start_measure)
     prompt = model_prompt(model_input) + generation_prefix
@@ -274,7 +275,7 @@ def _sample_model_continuation(
         temperature=args.temperature,
         top_p=args.top_p,
         repetition_penalty=args.repetition_penalty,
-        max_new_tokens=args.max_new_tokens,
+        max_new_tokens=max_new_tokens if max_new_tokens is not None else args.max_new_tokens,
         stop_strings=["END_SCORE"],
         stopping_criteria=[
             _PlanBoundaryStoppingCriteria(tokenizer, encoded["input_ids"].shape[1], final_measure),
@@ -341,6 +342,7 @@ def _sample_hierarchical_score(
                     / f"candidate_{candidate_number}.section_{section_index}.attempt_{attempt}.raw.dsl",
                     attempt_seed,
                     f"Candidate {candidate_number} section {section.label} attempt {attempt}",
+                    args.max_section_new_tokens,
                 )
                 fragment = _score_fragment_from_continuation(
                     continuation,
@@ -889,6 +891,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--section-candidates", type=int, default=2)
     parser.add_argument("--resume-score-ir")
     parser.add_argument("--max-new-tokens", type=int, default=65536)
+    parser.add_argument("--max-section-new-tokens", type=int, default=8192)
     parser.add_argument("--skip-musescore", action="store_true")
     parser.add_argument("--musescore-bin")
     return parser

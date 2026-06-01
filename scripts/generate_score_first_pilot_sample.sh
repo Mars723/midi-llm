@@ -26,7 +26,9 @@ python -m midi_llm.generate_checkpoint \
   --candidates "${MIDI_LLM_SAMPLE_CANDIDATES:-2}" \
   --section-candidates "${MIDI_LLM_SAMPLE_SECTION_CANDIDATES:-2}" \
   --temperature "${MIDI_LLM_SAMPLE_TEMPERATURE:-0.8}" \
+  --top-p "${MIDI_LLM_SAMPLE_TOP_P:-0.95}" \
   --repetition-penalty "${MIDI_LLM_SAMPLE_REPETITION_PENALTY:-1.01}" \
+  --max-section-new-tokens "${MIDI_LLM_SAMPLE_MAX_SECTION_NEW_TOKENS:-8192}" \
   --skip-musescore \
   --output-dir "$OUTPUT"
 
