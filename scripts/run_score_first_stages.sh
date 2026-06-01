@@ -138,6 +138,18 @@ two_staff_refinement() {
     --learning-rate "${MIDI_LLM_TWO_STAFF_REFINEMENT_LEARNING_RATE:-0.00005}"
 }
 
+variation_repair_refinement() {
+  run_stage \
+    10_variation_repair_refinement \
+    section-expand-16-64,masked-span-inpaint,recapitulation-revise,section-variation-revise \
+    "${MIDI_LLM_VARIATION_REPAIR_REFINEMENT_EPOCHS:-1}" \
+    "$RUN_ROOT/09_two_staff_refinement/adapter" \
+    --min-variation-score "${MIDI_LLM_VARIATION_REPAIR_MIN_VARIATION_SCORE:-0.70}" \
+    --min-lower-staff-measure-coverage "${MIDI_LLM_MIN_LOWER_STAFF_MEASURE_COVERAGE:-0.75}" \
+    --gradient-accumulation-steps "${MIDI_LLM_VARIATION_REPAIR_GRADIENT_ACCUMULATION_STEPS:-8}" \
+    --learning-rate "${MIDI_LLM_VARIATION_REPAIR_LEARNING_RATE:-0.00003}"
+}
+
 case "${1:-pilot}" in
   smoke)
     smoke
@@ -171,6 +183,9 @@ case "${1:-pilot}" in
   two-staff-refinement)
     two_staff_refinement
     ;;
+  variation-repair-refinement)
+    variation_repair_refinement
+    ;;
   all)
     smoke
     grammar
@@ -182,9 +197,10 @@ case "${1:-pilot}" in
     diversity_whole_piece
     balance_refinement
     two_staff_refinement
+    variation_repair_refinement
     ;;
   *)
-    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|balance-refinement|two-staff-refinement|all}" >&2
+    echo "Usage: $0 {smoke|grammar|whole-piece|pilot|structure|whole-piece-focus|diversity|balance-refinement|two-staff-refinement|variation-repair-refinement|all}" >&2
     exit 2
     ;;
 esac

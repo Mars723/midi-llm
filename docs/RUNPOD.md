@@ -120,6 +120,14 @@ export MIDI_LLM_RESUME_CHECKPOINT_DIR=/workspace/midi-llm/training_runs/score_fi
 bash scripts/run_score_first_stages.sh two-staff-refinement
 ```
 
+For the focused stage 10 diversity repair pass, set the backup artifact stage
+before starting the same watcher pattern:
+
+```bash
+export MIDI_LLM_BACKUP_STAGE=10_variation_repair_refinement
+bash scripts/run_score_first_stages.sh variation-repair-refinement
+```
+
 To add offsite Google Drive backup, create an ephemeral `rclone`
 configuration on the container disk:
 

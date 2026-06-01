@@ -271,8 +271,19 @@ structural variation repair, runs a whole-piece pass, and finishes with a
 lower-learning-rate balanced refinement across grammar, local, repair,
 ending, and whole-piece tasks. It then runs `09_two_staff_refinement` with
 `--min-lower-staff-measure-coverage 0.75` so accompaniment textures retain
-active lower-staff notation. The sample helper uses
-`09_two_staff_refinement/adapter` by default. Override it with
+active lower-staff notation.
+
+After a two-staff review, run the focused variation repair pass:
+
+```bash
+bash scripts/run_score_first_stages.sh variation-repair-refinement
+```
+
+This resumes the stage 09 adapter, raises the source-work variation threshold
+to `0.70`, and focuses on section expansion, masked inpainting,
+recapitulation revision, and section variation revision. The sample helper
+prefers `10_variation_repair_refinement/adapter` when present and otherwise
+falls back to `09_two_staff_refinement/adapter`. Override it with
 `MIDI_LLM_SAMPLE_ADAPTER_DIR` only when comparing checkpoints.
 
 Use `bash scripts/run_score_first_stages.sh all` when running every phase
@@ -282,7 +293,7 @@ Generate a complete score sample from a trained adapter:
 
 ```bash
 python -m midi_llm.generate_checkpoint \
-  --adapter-dir training_runs/score_first_intermediate_v2/09_two_staff_refinement/adapter \
+  --adapter-dir training_runs/score_first_intermediate_v2/10_variation_repair_refinement/adapter \
   --prompt "A lyrical intermediate nocturne with a tense middle section and a calm return." \
   --genre nocturne \
   --form ABA \
@@ -291,10 +302,11 @@ python -m midi_llm.generate_checkpoint \
 ```
 
 This path defaults to hierarchical sampling: each planned section reads the
-same whole-piece blueprint and motif bank plus the generated left neighbor,
-samples two alternatives, selects the stronger local fragment, and then the
-compiler merges sections into one complete score. Override this with
-`--section-candidates`. Each selected section writes a
+same whole-piece blueprint and motif bank plus the generated left neighbor.
+Longer planned sections expand through bounded local windows, each window
+samples two alternatives, and the compiler selects stronger local fragments
+before merging one complete score. Override this with `--section-candidates`
+and `--max-expansion-measures`. Each selected section writes a
 `candidate_<n>.partial_after_<section>.score.ir.json` recovery point; pass one
 back through `--resume-score-ir` to retry only the remaining sections. Use
 `--strategy single-pass` only as a research comparison. Both paths reject
