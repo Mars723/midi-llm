@@ -364,6 +364,9 @@ def _sample_hierarchical_score(
                         target_range,
                         allow_terminal_empty=terminal_expansion,
                     )
+                    merge_errors = _fragment_merge_errors(partial, fragment)
+                    if merge_errors:
+                        raise ValueError("; ".join(merge_errors))
                 except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
                     if terminal_expansion and "planned tonic" in str(error):
                         try:
@@ -376,6 +379,9 @@ def _sample_hierarchical_score(
                                 allow_terminal_empty=True,
                                 require_terminal_tonic=False,
                             )
+                            merge_errors = _fragment_merge_errors(partial, fragment)
+                            if merge_errors:
+                                raise ValueError("; ".join(merge_errors))
                         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                             pass
                         else:
@@ -514,6 +520,28 @@ def _fragment_quality_score(score: PianoScoreIR) -> float:
         - abs(notes_per_measure - 14),
         3,
     )
+
+
+def _fragment_merge_errors(partial_score: PianoScoreIR, fragment: PianoScoreIR) -> List[str]:
+    """Reject local fragments that extend a repetition loop across a window boundary."""
+
+    merged = PianoScoreIR(
+        plan=partial_score.plan,
+        motif_bank=partial_score.motif_bank,
+        notes=[*partial_score.notes, *fragment.notes],
+        directions=[],
+    )
+    repetition = _measure_repetition_metrics(merged)
+    errors = []
+    if repetition["longest_identical_measure_run"] > 4:
+        errors.append("Generated fragment extends identical measure content across window boundaries")
+    if (
+        repetition["periodic_measure_loop_period"] is not None
+        and repetition["periodic_measure_loop_span"] >= 16
+        and repetition["periodic_measure_loop_ratio"] > 0.75
+    ):
+        errors.append("Generated fragment extends a short measure pattern across window boundaries")
+    return errors
 
 
 def _section_model_input(

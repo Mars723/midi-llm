@@ -28,6 +28,7 @@ from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
     _ending_fragment_has_tonic,
+    _fragment_merge_errors,
     _fragment_quality_score,
     _measure_event_budget_exceeded,
     _normalize_model_note_event,
@@ -232,6 +233,39 @@ class ScoreFirstTest(unittest.TestCase):
                 [1, 4],
                 allow_terminal_empty=False,
             )
+
+    def test_checkpoint_fragment_merge_rejects_cross_window_measure_loop(self):
+        score, _ = self.build_score()
+        partial = PianoScoreIR(
+            plan=score.plan,
+            motif_bank=score.motif_bank,
+            notes=[
+                NoteEvent(id=f"upper-{measure}", measure=measure, beat=0.0, duration=1.0, pitch=60, staff=1)
+                for measure in range(1, 5)
+            ]
+            + [
+                NoteEvent(id=f"lower-{measure}", measure=measure, beat=0.0, duration=1.0, pitch=48, staff=2)
+                for measure in range(1, 5)
+            ],
+            directions=[],
+        )
+        fragment = PianoScoreIR(
+            plan=score.plan,
+            motif_bank=score.motif_bank,
+            notes=[
+                NoteEvent(id=f"upper-{measure}", measure=measure, beat=0.0, duration=1.0, pitch=60, staff=1)
+                for measure in range(5, 9)
+            ]
+            + [
+                NoteEvent(id=f"lower-{measure}", measure=measure, beat=0.0, duration=1.0, pitch=48, staff=2)
+                for measure in range(5, 9)
+            ],
+            directions=[],
+        )
+        self.assertEqual(
+            _fragment_merge_errors(partial, fragment),
+            ["Generated fragment extends identical measure content across window boundaries"],
+        )
 
     def test_checkpoint_continuation_rejects_short_periodic_measure_loop(self):
         score, _ = self.build_score()
