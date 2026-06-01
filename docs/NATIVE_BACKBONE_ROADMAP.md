@@ -35,6 +35,15 @@ human preference annotations and exposes a MIDI quality score. Its
 `CC-BY-NC-SA-4.0` license means it must not silently become a commercial
 production dependency.
 
+After installing `symupe`, run the optional classifier explicitly:
+
+```bash
+python -m midi_llm.research_symupe \
+  --run-dir generated_native_backbone/nocturne_parity \
+  --acknowledge-non-commercial-research-license \
+  classify
+```
+
 ### N2: Improve Completion And Form Without Relearning Note Syntax
 
 Start with larger native token budgets and measure natural-stop behavior.
@@ -70,6 +79,15 @@ Do not conflate composition structure with humanized performance timing.
 - [`SyMuPe`](https://arxiv.org/abs/2511.03425) separates score MIDI from
   performance MIDI and releases PianoFlow for humanization. Evaluate it only
   in the non-commercial research lane because of its released license.
+
+Generate a separate expressive overlay without replacing `native.mid`:
+
+```bash
+python -m midi_llm.research_symupe \
+  --run-dir generated_native_backbone/nocturne_parity \
+  --acknowledge-non-commercial-research-license \
+  perform --candidates 2,4
+```
 
 ### N4: Improve Draft MIDI-To-Score Conversion
 

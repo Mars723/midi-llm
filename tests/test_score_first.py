@@ -64,6 +64,11 @@ from midi_llm.planner import ComposeControls, create_piece_plan
 from midi_llm.prepare_pdmx import _quality_label, _tasks_for_quality, prepare_manifest
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
+from midi_llm.research_symupe import (
+    _candidate_midis,
+    _normalize_candidate_name,
+    _require_research_license_ack,
+)
 from midi_llm.scoredsl import decode_score, encode_score
 from midi_llm.score_ir import NoteEvent, PianoScoreIR, ScoreDirection, read_score, validate_score, write_json
 from midi_llm.training import create_run_plan
@@ -180,6 +185,18 @@ class ScoreFirstTest(unittest.TestCase):
             manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["candidates"]), 1)
             self.assertEqual(manifest["failures"], [{"candidate": 2, "seed": 24, "reason": "bad native stream"}])
+
+    def test_symupe_research_helpers_require_explicit_license_ack(self):
+        with self.assertRaisesRegex(SystemExit, "CC-BY-NC-SA-4.0"):
+            _require_research_license_ack(False)
+        _require_research_license_ack(True)
+        self.assertEqual(_normalize_candidate_name("2"), "candidate_2")
+        self.assertEqual(_normalize_candidate_name("candidate_4"), "candidate_4")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "candidate_2").mkdir()
+            (root / "candidate_2" / "native.mid").touch()
+            self.assertEqual(_candidate_midis(root), [root / "candidate_2" / "native.mid"])
 
     def test_scoredsl_round_trip(self):
         score, _ = self.build_score()
