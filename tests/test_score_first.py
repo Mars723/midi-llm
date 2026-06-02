@@ -95,7 +95,7 @@ from midi_llm.prepare_pdmx import (
 )
 from midi_llm.prepare_maestro import prepare_maestro_manifest
 from midi_llm.prepare_pianocore import _inventory_row as pianocore_inventory_row
-from midi_llm.profile_mutopia_midi import _is_medium_piece_review_candidate, _preferred_midi_path
+from midi_llm.profile_mutopia_midi import _difficulty_proxy, _is_medium_piece_review_candidate, _preferred_midi_path
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.research_symupe import (
@@ -2000,6 +2000,17 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertTrue(_is_medium_piece_review_candidate(row))
         self.assertFalse(_is_medium_piece_review_candidate({"stats": {**row["stats"], "duration_seconds": 10}}))
         self.assertFalse(_is_medium_piece_review_candidate({"stats": {**row["stats"], "potential_density_drift": True}}))
+        proxy, evidence = _difficulty_proxy(
+            {
+                "notes_per_second": 10.5,
+                "pitch_range": [24, 88],
+                "max_active_notes": 8,
+                "max_notes_at_onset": 7,
+                "tempo_events": 9,
+            }
+        )
+        self.assertEqual(proxy, "advanced-proxy")
+        self.assertEqual(evidence["policy"], "review-priority-only-not-a-formal-difficulty-label")
 
     def test_notation_corpus_audit_profiles_expressive_two_staff_mxl(self):
         with tempfile.TemporaryDirectory() as raw_dir:

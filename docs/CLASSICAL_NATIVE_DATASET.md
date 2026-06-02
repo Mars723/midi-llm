@@ -149,7 +149,10 @@ The final profile helper reads only clean solo-piano MIDI candidates. It
 rejects empty, abnormally dense, very short, and implausibly long outputs into
 separate review queues. Its bounded-piece view is still not a difficulty label
 and remains outside the composition backbone until musical review. Native
-tokens from this view are also review-only preprocessing artifacts.
+tokens from this view are also review-only preprocessing artifacts. A separate
+`difficulty_proxy` uses MIDI density, keyboard span, simultaneity, and tempo
+event evidence only to prioritize review; formal difficulty remains
+`unreviewed`.
 
 Native-token conversion is CPU-only. Prepare the local converter without
 allocating a GPU:
