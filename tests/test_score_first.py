@@ -62,6 +62,11 @@ from midi_llm.native_tokens import (
     normalize_native_model_tokens,
     segment_native_event_tokens,
 )
+from midi_llm.native_whole_piece import (
+    assemble_hierarchical_aba_piece,
+    infer_key,
+    select_native_material,
+)
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
@@ -234,6 +239,79 @@ class ScoreFirstTest(unittest.TestCase):
             manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["candidates"]), 1)
             self.assertEqual(manifest["failures"], [{"candidate": 2, "seed": 24, "reason": "bad native stream"}])
+
+    def test_native_whole_piece_selects_non_drifting_material(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "candidate_1").mkdir()
+            (root / "candidate_2").mkdir()
+            (root / "candidate_1" / "native.mid").touch()
+            (root / "candidate_2" / "native.mid").touch()
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "candidate": 1,
+                                "native_midi": "candidate_1/native.mid",
+                                "stats": {
+                                    "duration_seconds": 39.0,
+                                    "distinct_pitches": 20,
+                                    "potential_density_drift": True,
+                                },
+                            },
+                            {
+                                "candidate": 2,
+                                "native_midi": "candidate_2/native.mid",
+                                "stats": {
+                                    "duration_seconds": 36.0,
+                                    "distinct_pitches": 18,
+                                    "potential_density_drift": False,
+                                },
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(select_native_material(root, 38.0), root / "candidate_2" / "native.mid")
+
+    def test_native_whole_piece_assembles_aba_reuse_and_coda(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            a_midi = root / "a.mid"
+            b_midi = root / "b.mid"
+            write_performance_midi(*self.build_score(), a_midi)
+            write_performance_midi(*self.build_score(), b_midi)
+            output = assemble_hierarchical_aba_piece(
+                a_midi,
+                b_midi,
+                root / "whole",
+                prompt="A complete nocturne.",
+                blueprint="ABA with a coda.",
+                a_seconds=4.0,
+                b_seconds=4.0,
+                coda_seconds=1.0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            parsed = parse_midi(output / "performance.mid")
+            self.assertTrue(manifest["whole_piece"])
+            self.assertTrue(manifest["completion"]["a_prime_reuses_theme_a"])
+            self.assertEqual([section["label"] for section in manifest["sections"]], ["A", "B", "A'", "Coda"])
+            self.assertGreater(len(parsed.notes), 10)
+            self.assertTrue((output / "piece_plan.ir.json").exists())
+            self.assertTrue((output / "motif_bank.ir.json").exists())
+
+    def test_native_whole_piece_key_inference_prefers_c_minor(self):
+        notes = [
+            MidiNote(tick=0, duration=480, pitch=60, velocity=64),
+            MidiNote(tick=480, duration=240, pitch=63, velocity=64),
+            MidiNote(tick=720, duration=240, pitch=67, velocity=64),
+            MidiNote(tick=960, duration=480, pitch=72, velocity=64),
+        ]
+        root, mode = infer_key(notes)
+        self.assertEqual(root, 0)
+        self.assertEqual(mode, "minor")
 
     def test_symupe_research_helpers_require_explicit_license_ack(self):
         with self.assertRaisesRegex(SystemExit, "CC-BY-NC-SA-4.0"):

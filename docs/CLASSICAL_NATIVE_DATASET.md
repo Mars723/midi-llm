@@ -144,3 +144,19 @@ bash scripts/run_native_adapter_parity.sh \
   /root/midllm-local/training_runs/native_classical_v1/02_pilot/adapter \
   /root/midllm-local/generated_native_backbone/native_classical_v1_pilot
 ```
+
+Do not mislabel a token-budget-capped parity replay as a complete composition.
+The upstream Anticipation absolute-time vocabulary covers an approximately
+`100`-second local window. Produce an interim whole-piece sample with a shared
+blueprint, independently generated A and B native materials, explicit A-prime
+motif reuse, and a realized coda termination target:
+
+```bash
+bash scripts/generate_native_whole_piece_pilot.sh \
+  /root/midllm-local/training_runs/native_classical_v1/02_pilot/adapter \
+  /root/midllm-local/generated_native_backbone/native_classical_v1_whole_piece_001
+```
+
+This interim generator is an honest structural milestone, not the release
+architecture. Its manifest records that boundary inpainting and generated
+notation markings are still pending.
