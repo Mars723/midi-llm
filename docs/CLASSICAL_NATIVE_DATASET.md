@@ -199,6 +199,15 @@ performance source, alignment tier, and quality fields while forcing
 bash scripts/collect_pianocore_metadata_resources.sh
 ```
 
+ASAP is also isolated from the commercial composition backbone because its
+official repository license is `CC BY-NC-SA 4.0`. Collect only the repository
+metadata, license, and tree inventory first. Do not check out its score and
+performance blobs into the commercial path:
+
+```bash
+bash scripts/collect_asap_metadata_resources.sh
+```
+
 ## Next Training Gate
 
 1. Materialize and inspect token-length distributions.

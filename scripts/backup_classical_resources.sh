@@ -12,7 +12,7 @@ SNAPSHOT="$BACKUP_ROOT/snapshots/$STAMP"
 
 mkdir -p "$SNAPSHOT" "$BACKUP_ROOT/latest"
 MANIFEST_DIRS=()
-for name in pdmx-native-classical-v3 mutopia-piano-v1 classical-resource-inventory-v1 maestro-performance-v3 pianocore-metadata-v1; do
+for name in pdmx-native-classical-v3 mutopia-piano-v1 classical-resource-inventory-v1 maestro-performance-v3 pianocore-metadata-v1 asap-metadata-v1; do
   [[ -d "$MANIFEST_ROOT/$name" ]] && MANIFEST_DIRS+=("$name")
 done
 if [[ ${#MANIFEST_DIRS[@]} -eq 0 ]]; then
@@ -32,6 +32,11 @@ fi
 if [[ -d "$RESOURCE_ROOT/toolchains" ]]; then
   find "$RESOURCE_ROOT/toolchains" -maxdepth 1 -type f -name 'lilypond-*.tar.gz' \
     -exec shasum -a 256 {} + > "$SNAPSHOT/toolchain-resource-checksums.sha256"
+fi
+if [[ -d "$RESOURCE_ROOT/asap" ]]; then
+  find "$RESOURCE_ROOT/asap" -maxdepth 1 -type f \
+    \( -name '*.csv' -o -name '*.md' -o -name '*.txt' \) \
+    -exec shasum -a 256 {} + > "$SNAPSHOT/asap-metadata-resource-checksums.sha256"
 fi
 tar -czf "$SNAPSHOT/classical-resource-manifests.tar.gz" -C "$MANIFEST_ROOT" "${MANIFEST_DIRS[@]}"
 sha256sum "$SNAPSHOT/classical-resource-manifests.tar.gz" > "$SNAPSHOT/classical-resource-manifests.tar.gz.sha256"

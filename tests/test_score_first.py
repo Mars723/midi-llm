@@ -94,6 +94,7 @@ from midi_llm.prepare_pdmx import (
     prepare_manifest,
 )
 from midi_llm.prepare_maestro import prepare_maestro_manifest
+from midi_llm.prepare_asap import _inventory_row as asap_inventory_row
 from midi_llm.prepare_pianocore import _inventory_row as pianocore_inventory_row
 from midi_llm.profile_mutopia_midi import _difficulty_proxy, _is_medium_piece_review_candidate, _preferred_midi_path
 from midi_llm.render_mutopia_review import _gallery_html
@@ -1991,6 +1992,19 @@ class ScoreFirstTest(unittest.TestCase):
         }
         source["id"] = "PianoCoRe_000001"
         row = pianocore_inventory_row(source)
+        self.assertFalse(row["commercial_use_allowed"])
+        self.assertFalse(row["composition_backbone_eligible"])
+        self.assertIn("non-commercial-research", row["use_channel"])
+
+    def test_asap_inventory_is_explicitly_non_commercial_and_not_composition_training(self):
+        source = {
+            field: ""
+            for field in (
+                "composer title folder xml_score midi_score midi_performance performance_annotations "
+                "midi_score_annotations maestro_midi_performance maestro_audio_performance"
+            ).split()
+        }
+        row = asap_inventory_row(source, "abc123")
         self.assertFalse(row["commercial_use_allowed"])
         self.assertFalse(row["composition_backbone_eligible"])
         self.assertIn("non-commercial-research", row["use_channel"])
