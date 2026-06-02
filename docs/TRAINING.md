@@ -9,6 +9,12 @@
 
 ## PDMX Core
 
+For the upstream-native classical specialization path, first use
+[`CLASSICAL_NATIVE_DATASET.md`](CLASSICAL_NATIVE_DATASET.md). That workflow
+collects and audits a complete PDMX catalog, a strict medium-difficulty native
+training view, and a separately namespaced Mutopia supplement before GPU
+training is considered.
+
 Fetch PDMX from the official
 [Zenodo record 15571083](https://zenodo.org/records/15571083). The downloader
 resumes partial downloads and verifies the published MD5 checksums:

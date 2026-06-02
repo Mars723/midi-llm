@@ -11,12 +11,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
+import zipfile
 
 from midi_llm.compiler import find_musescore, render_musescore, write_musicxml, write_performance_midi
+from midi_llm.collect_mutopia import _instrument_tier, _license, collect_mutopia_sources
 from midi_llm.compose import compose
 from midi_llm.curriculum import prepare_curriculum
 from midi_llm.evaluate import evaluate_score
 from midi_llm.fetch_pdmx import (
+    _download_range,
     _extract_tar,
     _manifest_paths,
     _missing_ranges,
@@ -25,6 +28,7 @@ from midi_llm.fetch_pdmx import (
     _split_range,
     _validate_coverage,
 )
+from midi_llm.dataset_audit import audit_manifest, write_audit_report
 from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
@@ -46,6 +50,7 @@ from midi_llm.generate_checkpoint import (
 from midi_llm.import_midi import MidiNote, ParsedMidi, TempoPoint, draft_from_parsed, parse_midi, select_structural_tempos
 from midi_llm.materialize_native_training import classical_native_prompt, materialize_native_training_dataset
 from midi_llm.materialize_training import materialize_training_dataset
+from midi_llm.merge_manifests import merge_manifests
 from midi_llm.model_scoredsl import decode_model_score, encode_model_score, model_score_generation_prefix
 from midi_llm.musicxml_score import import_musicxml_score
 from midi_llm.native_backbone import (
@@ -76,15 +81,18 @@ from midi_llm.native_whole_piece import (
     sparse_voice_led_cadence,
 )
 from midi_llm.notation_analysis import analyze_notation
+from midi_llm.notation_corpus_audit import audit_notation_corpus, profile_musicxml
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
 from midi_llm.planner import ComposeControls, create_piece_plan
 from midi_llm.prepare_pdmx import (
     _composer_style_label,
+    _genre_label,
     _is_solo_piano,
     _quality_label,
     _tasks_for_quality,
     prepare_manifest,
 )
+from midi_llm.prepare_maestro import prepare_maestro_manifest
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.research_symupe import (
@@ -1784,6 +1792,194 @@ class ScoreFirstTest(unittest.TestCase):
             extracted = extract_cloud_bundle(bundle, root / "remote")
             self.assertTrue(Path(extracted["dataset_dir"], "train.jsonl").exists())
             self.assertFalse(Path(extracted["dataset_dir"], "scores").exists())
+
+    def test_source_manifest_merge_preserves_namespaces_and_removes_exact_duplicates(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            first = root / "first.jsonl"
+            second = root / "second.jsonl"
+            row = {
+                "source_dataset": "PDMX",
+                "work_id": "work-1",
+                "composer_style": "bach",
+                "composer_period": "baroque",
+                "genre": "prelude",
+                "difficulty": "intermediate",
+                "quality_tier": "canonical-core",
+            }
+            first.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            second.write_text(
+                json.dumps(row) + "\n" + json.dumps({**row, "source_dataset": "Mutopia"}) + "\n",
+                encoding="utf-8",
+            )
+            output = root / "merged.jsonl"
+            summary = merge_manifests((first, second), output)
+            self.assertEqual(summary["input_rows"], 3)
+            self.assertEqual(summary["duplicate_rows_removed"], 1)
+            self.assertEqual(summary["merged_unique_works"], 2)
+            self.assertEqual(summary["source_dataset_counts"], {"Mutopia": 1, "PDMX": 1})
+
+    def test_dataset_audit_checks_required_composers_and_extracted_files(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            rows = []
+            for composer in ("bach", "mozart", "beethoven", "chopin"):
+                midi = root / f"{composer}.mid"
+                score = root / f"{composer}.mxl"
+                midi.write_bytes(b"midi")
+                score.write_bytes(b"score")
+                rows.append(
+                    {
+                        "source_dataset": "PDMX",
+                        "work_id": composer,
+                        "path": score.name,
+                        "native_midi_path": midi.name,
+                        "source_license": "publicdomain",
+                        "composer_style": composer,
+                        "composer_period": "test-period",
+                        "genre": "prelude",
+                        "form": "free-sectional",
+                        "difficulty": "intermediate",
+                        "quality_tier": "canonical-core",
+                        "measure_count": 64,
+                    }
+                )
+            manifest = root / "manifest.jsonl"
+            manifest.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            report = audit_manifest(manifest, dataset_root=root, min_composer_works=1, expect_files=True)
+            self.assertTrue(report["ready"])
+            self.assertEqual(report["files"]["native_midi_files_extracted"], 4)
+            artifacts = write_audit_report(report, root / "audit")
+            self.assertIn("Required Composer Coverage", Path(artifacts["markdown"]).read_text(encoding="utf-8"))
+
+    def test_pdmx_range_download_retries_connection_failure(self):
+        class Response(io.BytesIO):
+            status = 206
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            output = Path(raw_dir) / "range.part"
+            with (
+                patch("midi_llm.fetch_pdmx.urlopen", side_effect=[OSError("temporary TLS failure"), Response(b"abcd")]),
+                patch("midi_llm.fetch_pdmx.time.sleep"),
+            ):
+                _download_range("https://example.test/file", 0, 3, output)
+            self.assertEqual(output.read_bytes(), b"abcd")
+
+    def test_extended_classical_genre_labels_cover_common_piano_forms(self):
+        self.assertEqual(_genre_label({"title": "Mazurka Op. 7 No. 1"})[0], "mazurka")
+        self.assertEqual(_genre_label({"title": "Piano Sonata No. 8"})[0], "sonata")
+        self.assertEqual(_genre_label({"title": "Fugue in C minor"})[0], "fugue")
+
+    def test_mutopia_collector_filters_instruments_and_preserves_license_evidence(self):
+        self.assertEqual(_instrument_tier("Piano"), "solo-piano")
+        self.assertEqual(_instrument_tier("Harpsichord, Piano"), "historical-keyboard-compatible")
+        self.assertIsNone(_instrument_tier("Voice and Piano"))
+        self.assertIsNone(_instrument_tier("Piano Duet"))
+        source_license, source_license_url, evidence = _license(
+            'license = "Creative Commons Attribution-ShareAlike 4.0"\n'
+            "https://creativecommons.org/licenses/by-sa/4.0/",
+            {"license": "Creative Commons Attribution-ShareAlike 4.0"},
+        )
+        self.assertEqual(source_license, "cc-by-sa-4.0")
+        self.assertIn("/by-sa/4.0/", source_license_url)
+        self.assertEqual(evidence, "declared-in-lilypond-source")
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            ftp = root / "ftp" / "BachJS" / "BWV1"
+            ftp.mkdir(parents=True)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_text("abc123\n", encoding="utf-8")
+            (ftp / "score.ly").write_text(
+                r'''
+\header {
+  mutopiatitle = "Prelude in C"
+  composer = "Johann Sebastian Bach"
+  mutopiacomposer = "BachJS"
+  mutopiainstrument = "Piano"
+  style = "Baroque"
+  maintainer = "Editor"
+  footer = "Mutopia-2026/01/01-1"
+  license = "Creative Commons Attribution 4.0"
+}
+% https://creativecommons.org/licenses/by/4.0/
+''',
+                encoding="utf-8",
+            )
+            output = root / "manifest"
+            summary = collect_mutopia_sources(root, output)
+            self.assertEqual(summary["selected_unique_works"], 1)
+            row = json.loads((output / "mutopia_piano_manifest.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(row["composer_style"], "bach")
+            self.assertEqual(row["source_license"], "cc-by-4.0")
+            self.assertEqual(row["instrument_tier"], "solo-piano")
+
+    def test_notation_corpus_audit_profiles_expressive_two_staff_mxl(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            score = root / "score.mxl"
+            with zipfile.ZipFile(score, "w") as archive:
+                archive.writestr("score.xml", _notation_musicxml())
+            profile = profile_musicxml(score)
+            self.assertEqual(profile["marking_tier"], "expressive-two-staff")
+            self.assertGreater(profile["dynamic_events"], 0)
+            self.assertGreater(profile["pedal_events"], 0)
+            self.assertGreater(profile["wedge_events"], 0)
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "work_id": "work-1",
+                        "split": "train",
+                        "source_dataset": "PDMX",
+                        "path": score.name,
+                        "composer_style": "chopin",
+                        "composer_period": "romantic",
+                        "genre": "nocturne",
+                        "difficulty": "intermediate",
+                        "quality_tier": "canonical-core",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = audit_notation_corpus(manifest, root, root / "audit")
+            self.assertEqual(summary["works_profiled"], 1)
+            self.assertEqual(summary["marking_tier_counts"], {"expressive-two-staff": 1})
+            self.assertEqual(summary["score_editor_views"]["expressive_two_staff_works"], 1)
+            self.assertTrue((root / "audit" / "marked_two_staff_profiles.jsonl").exists())
+
+    def test_maestro_manifest_isolated_from_composition_backbone(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            metadata = root / "maestro.csv"
+            with metadata.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=("canonical_composer", "canonical_title", "split", "year", "midi_filename", "duration"),
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "canonical_composer": "Frédéric Chopin",
+                        "canonical_title": "Nocturne Op. 9 No. 2",
+                        "split": "train",
+                        "year": "2018",
+                        "midi_filename": "2018/test.midi",
+                        "duration": "240.5",
+                    }
+                )
+            summary = prepare_maestro_manifest(metadata, root / "output")
+            self.assertFalse(summary["commercial_use_allowed"])
+            row = json.loads((root / "output" / "maestro_performance_manifest.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(row["composer_style"], "chopin")
+            self.assertEqual(row["genre"], "nocturne")
+            self.assertFalse(row["composition_backbone_eligible"])
 
     def test_release_gate_dry_run_writes_review_artifacts(self):
         with tempfile.TemporaryDirectory() as raw_dir:

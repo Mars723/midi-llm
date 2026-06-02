@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VENV=${MIDI_LLM_NATIVE_VENV:-/root/.venv-midllm-native}
-DATASET=${MIDI_LLM_NATIVE_DATASET:-/root/midllm-local/classical-native-v1/training_manifests/pdmx-classical-core/native_tokens_v2}
+DATASET=${MIDI_LLM_NATIVE_DATASET:-/root/midllm-local/classical-native-v1/training_manifests/pdmx-native-classical-v3/native_tokens_training_view}
 RUN_ROOT=${MIDI_LLM_NATIVE_RUN_ROOT:-/root/midllm-local/training_runs/native_classical_v1}
 
 if [[ ! -f "$VENV/bin/activate" ]]; then

@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from http.client import HTTPException
 import json
 from pathlib import Path
 import tarfile
+import time
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Set
 from urllib.request import Request, urlopen
 
@@ -20,7 +22,8 @@ RESOURCES: Dict[str, Dict[str, Any]] = {
     "mxl.tar.gz": {"size": 1894335797, "md5": "49ffd75ecf5489c0be6d41182eb11ff7"},
     "mid.tar.gz": {"size": 214395208, "md5": "d920a21b2fcd99a56d9c381b39debbb2"},
 }
-PARALLEL_CHUNK_BYTES = 32 * 1024 * 1024
+PARALLEL_CHUNK_BYTES = 4 * 1024 * 1024
+DOWNLOAD_ATTEMPTS = 16
 
 
 def fetch_resources(
@@ -207,20 +210,27 @@ def _download_range(url: str, start: int, end: int, destination: Path) -> None:
     expected_size = end - start + 1
     if destination.exists() and destination.stat().st_size > expected_size:
         destination.unlink()
-    for _ in range(4):
+    last_error = None
+    for attempt in range(DOWNLOAD_ATTEMPTS):
         current_size = destination.stat().st_size if destination.exists() else 0
         if current_size == expected_size:
             return
         request = Request(url, headers={"Range": f"bytes={start + current_size}-{end}"})
-        with urlopen(request) as response:
-            if getattr(response, "status", None) != 206:
-                raise ValueError(f"Server did not honor Range request for {start + current_size}-{end}")
-            with destination.open("ab") as handle:
-                while chunk := response.read(1024 * 1024):
-                    handle.write(chunk)
+        try:
+            with urlopen(request) as response:
+                if getattr(response, "status", None) != 206:
+                    raise ValueError(f"Server did not honor Range request for {start + current_size}-{end}")
+                with destination.open("ab") as handle:
+                    while chunk := response.read(1024 * 1024):
+                        handle.write(chunk)
+        except (OSError, HTTPException) as error:
+            last_error = error
+            time.sleep(min(0.25 * (attempt + 1), 2))
     actual_size = destination.stat().st_size
     if actual_size != expected_size:
-        raise ValueError(f"Size mismatch for {destination}: expected {expected_size}, got {actual_size}")
+        raise ValueError(
+            f"Size mismatch for {destination}: expected {expected_size}, got {actual_size}"
+        ) from last_error
 
 
 def _md5(path: Path) -> str:

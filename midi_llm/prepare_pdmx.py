@@ -22,6 +22,27 @@ GENRE_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("minuet", ("minuet", "menuet", "minuetto")),
     ("waltz", ("waltz", "valse", "walzer")),
     ("etude", ("etude", "study", "studi")),
+    ("sonata", ("sonata", "sonatine", "sonatina")),
+    ("rondo", ("rondo", "rondeau")),
+    ("fugue", ("fugue", "fuga")),
+    ("invention", ("invention", "inventio")),
+    ("mazurka", ("mazurka", "mazur")),
+    ("polonaise", ("polonaise",)),
+    ("scherzo", ("scherzo",)),
+    ("march", ("march", "marche", "marsch")),
+    ("romance", ("romance", "romanza")),
+    ("ballade", ("ballade",)),
+    ("intermezzo", ("intermezzo",)),
+    ("bagatelle", ("bagatelle",)),
+    ("fantasia", ("fantasia", "fantasy", "fantaisie")),
+    ("toccata", ("toccata",)),
+    ("gavotte", ("gavotte",)),
+    ("sarabande", ("sarabande",)),
+    ("allemande", ("allemande",)),
+    ("gigue", ("gigue", "jig")),
+    ("sicilienne", ("sicilienne", "siciliana")),
+    ("berceuse", ("berceuse",)),
+    ("suite", ("suite",)),
 )
 DIFFICULTY_LABELS = ("easy", "intermediate", "advanced")
 QUALITY_FILTERS = ("metadata-curated", "canonical-core")
@@ -332,6 +353,8 @@ def _form_label(row: Dict[str, str], genre: str) -> Tuple[str, Dict[str, str]]:
             return "rondo", {"field": "title", "matched": pattern, "policy": "title-keyword"}
     if genre == "theme-and-variations":
         return "theme-and-variations", {"field": "genre", "matched": genre, "policy": "genre-heuristic"}
+    if genre == "rondo":
+        return "rondo", {"field": "genre", "matched": genre, "policy": "genre-heuristic"}
     if genre == "nocturne":
         return "ABA", {"field": "genre", "matched": genre, "policy": "genre-heuristic"}
     if genre == "minuet":

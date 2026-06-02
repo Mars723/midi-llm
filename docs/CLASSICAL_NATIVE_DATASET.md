@@ -36,33 +36,46 @@ and as a balancing key during training and evaluation.
 
 ## PDMX Core Commands
 
-Build a focused four-composer manifest:
+Collect resources before allocating training compute. The checked-in helper
+builds three separate views:
+
+- `catalog-all`: every PDMX work passing `no_license_conflict`, `all_valid`,
+  solo-piano, and preferred-arrangement filters.
+- `collected_manifest.jsonl`: the full four-composer core plus curated
+  intermediate expansion works. Preserve this broad collection for later
+  refinement.
+- `training_view_manifest.jsonl`: the first conservative medium-difficulty
+  training view. It retains intermediate works between `32` and `256`
+  measures and does not silently mix in collected outliers.
+
+Build and audit the manifests:
 
 ```bash
-python -m midi_llm.prepare_pdmx \
-  --metadata-csv training_resources/pdmx/PDMX.csv \
-  --output-dir training_manifests/pdmx-classical-core \
-  --composers bach,mozart,beethoven,chopin
+bash scripts/prepare_native_classical_resources.sh manifests
 ```
 
-Download and selectively extract only the referenced MIDI files:
+Download and selectively extract the PDMX files referenced by the collected
+view. Use `extract-catalog-midi` separately when expanding local preprocessing
+to the complete PDMX catalog:
 
 ```bash
-python -m midi_llm.fetch_pdmx \
-  --output-dir training_resources/pdmx \
-  --include-midi \
-  --extract-midi \
-  --midi-manifest training_manifests/pdmx-classical-core/pdmx_score_first_manifest.jsonl
+bash scripts/prepare_native_classical_resources.sh extract
+bash scripts/prepare_native_classical_resources.sh extract-catalog-midi
 ```
 
-Materialize complete pieces in the upstream extended vocabulary:
+Materialize the strict medium-difficulty training view in the upstream
+extended vocabulary:
 
 ```bash
-python -m midi_llm.materialize_native_training \
-  --manifest training_manifests/pdmx-classical-core/pdmx_score_first_manifest.jsonl \
-  --dataset-root training_resources/pdmx \
-  --output-dir training_manifests/pdmx-classical-core/native_tokens
+source .venv-native-preprocess/bin/activate
+bash scripts/prepare_native_classical_resources.sh notation-audit
+bash scripts/prepare_native_classical_resources.sh tokens
 ```
+
+The notation audit reads MXL structurally and reports two-staff coverage,
+tempo, dynamics, pedal, wedge, articulation, and fingering events. This keeps
+the future score-marking editor supervised by evidence instead of assuming
+that every composition source contains professional engraving detail.
 
 The materializer never truncates an oversized complete work. Anticipation uses
 segment-local absolute time tokens with an approximately 100-second vocabulary
@@ -82,6 +95,53 @@ Attribution-ShareAlike, Attribution, and public-domain contributions.
 Do not merge Mutopia files into the PDMX namespace. Preserve source URL,
 license, attribution, arranger/editor metadata, and hashes per score before
 including them.
+
+Collect the official Mutopia Git repository into a separate, review-only
+namespace:
+
+```bash
+bash scripts/collect_mutopia_resources.sh
+bash scripts/build_classical_resource_inventory.sh
+```
+
+The Mutopia collector conservatively excludes voice-and-piano, piano duet,
+and ensemble files. It distinguishes `solo-piano` from
+`historical-keyboard-compatible`, merges obvious LilyPond variants, stores the
+repository commit and SHA-256, and labels every result
+`supplemental-unreviewed`. It records legacy sources without an explicit
+license declaration for manual review instead of silently promoting them.
+
+Native-token conversion is CPU-only. Prepare the local converter without
+allocating a GPU:
+
+```bash
+bash scripts/bootstrap_native_preprocess.sh
+source .venv-native-preprocess/bin/activate
+bash scripts/prepare_native_classical_resources.sh tokens
+```
+
+Snapshot manifests and checksums outside the repository after each collection
+pass. Set `MIDI_LLM_RCLONE_REMOTE` when a configured Drive remote is available;
+set `MIDI_LLM_CLASSICAL_BACKUP_ARCHIVES=1` to mirror the downloaded archives:
+
+```bash
+bash scripts/backup_classical_resources.sh
+```
+
+## Non-Commercial Performance Overlay
+
+MAESTRO `v3.0.0` is useful for a later score-to-performance model because its
+MIDI captures key-strike velocity and sustain, sostenuto, and una-corda pedal
+positions. Its `CC BY-NC-SA 4.0` license means it must remain isolated from the
+composition backbone and any commercial path:
+
+```bash
+bash scripts/collect_maestro_performance_resources.sh
+```
+
+The generated rows are labeled
+`non-commercial-research-performance-overlay-only` and
+`composition_backbone_eligible=false`.
 
 ## Next Training Gate
 
