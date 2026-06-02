@@ -143,6 +143,7 @@ MIDI_LLM_MUTOPIA_COMPILE_LIMIT=20 bash scripts/compile_mutopia_resources.sh
 bash scripts/compile_mutopia_resources.sh
 bash scripts/profile_mutopia_resources.sh
 bash scripts/materialize_mutopia_review_tokens.sh
+bash scripts/render_mutopia_intermediate_review_gallery.sh
 ```
 
 The final profile helper reads only clean solo-piano MIDI candidates. It
@@ -152,7 +153,9 @@ and remains outside the composition backbone until musical review. Native
 tokens from this view are also review-only preprocessing artifacts. A separate
 `difficulty_proxy` uses MIDI density, keyboard span, simultaneity, and tempo
 event evidence only to prioritize review; formal difficulty remains
-`unreviewed`.
+`unreviewed`. The final gallery renders the original LilyPond score source to
+PDF for human review instead of round-tripping its MIDI through draft
+engraving.
 
 Native-token conversion is CPU-only. Prepare the local converter without
 allocating a GPU:

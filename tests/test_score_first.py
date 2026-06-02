@@ -96,6 +96,7 @@ from midi_llm.prepare_pdmx import (
 from midi_llm.prepare_maestro import prepare_maestro_manifest
 from midi_llm.prepare_pianocore import _inventory_row as pianocore_inventory_row
 from midi_llm.profile_mutopia_midi import _difficulty_proxy, _is_medium_piece_review_candidate, _preferred_midi_path
+from midi_llm.render_mutopia_review import _gallery_html
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.research_symupe import (
@@ -2011,6 +2012,25 @@ class ScoreFirstTest(unittest.TestCase):
         )
         self.assertEqual(proxy, "advanced-proxy")
         self.assertEqual(evidence["policy"], "review-priority-only-not-a-formal-difficulty-label")
+
+    def test_mutopia_review_gallery_links_source_pdf_and_midi_without_promoting(self):
+        html = _gallery_html(
+            [
+                {
+                    "composer_style": "bach",
+                    "title": "Prelude <C>",
+                    "genre": "prelude",
+                    "difficulty_proxy": "intermediate-proxy",
+                    "review_pdf_path": "scores/abc/score.pdf",
+                    "review_midi_path": "../compile/abc/score.midi",
+                    "render_status": "success-with-pdf",
+                }
+            ],
+            Path("."),
+        )
+        self.assertIn("Prelude &lt;C&gt;", html)
+        self.assertIn('href="scores/abc/score.pdf"', html)
+        self.assertIn("no row is promoted automatically", html)
 
     def test_notation_corpus_audit_profiles_expressive_two_staff_mxl(self):
         with tempfile.TemporaryDirectory() as raw_dir:
