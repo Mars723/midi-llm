@@ -44,6 +44,17 @@ pilot() {
     --save-steps "${MIDI_LLM_NATIVE_SAVE_STEPS:-25}"
 }
 
+conservative_pilot() {
+  python -m midi_llm.train_native \
+    --dataset-dir "$DATASET" \
+    --output-dir "$RUN_ROOT/03_conservative_pilot" \
+    --max-segments-per-work "${MIDI_LLM_NATIVE_MAX_SEGMENTS_PER_WORK:-4}" \
+    --max-seq-length "${MIDI_LLM_NATIVE_MAX_SEQ_LENGTH:-8192}" \
+    --max-steps "${MIDI_LLM_NATIVE_CONSERVATIVE_STEPS:-60}" \
+    --learning-rate "${MIDI_LLM_NATIVE_CONSERVATIVE_LEARNING_RATE:-0.000005}" \
+    --save-steps "${MIDI_LLM_NATIVE_CONSERVATIVE_SAVE_STEPS:-10}"
+}
+
 case "${1:-dry-run}" in
   dry-run)
     dry_run
@@ -54,8 +65,11 @@ case "${1:-dry-run}" in
   pilot)
     pilot
     ;;
+  conservative-pilot)
+    conservative_pilot
+    ;;
   *)
-    echo "Usage: $0 {dry-run|smoke|pilot}" >&2
+    echo "Usage: $0 {dry-run|smoke|pilot|conservative-pilot}" >&2
     exit 2
     ;;
 esac

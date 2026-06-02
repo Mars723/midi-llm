@@ -58,6 +58,42 @@ def segment_native_event_tokens(event_tokens: Iterable[int]) -> List[Dict[str, A
     return segments
 
 
+def rebase_native_event_tokens(event_tokens: Iterable[int]) -> List[int]:
+    """Move a native event stream to time zero without changing durations or notes."""
+
+    tokens = [int(token_id) for token_id in event_tokens]
+    validate_native_event_tokens(tokens, allow_absolute_time_overflow=True)
+    if not tokens:
+        return []
+    start = min(tokens[0::3])
+    rebased = [
+        token_id - start if index % 3 == 0 else token_id
+        for index, token_id in enumerate(tokens)
+    ]
+    validate_native_event_tokens(rebased)
+    return rebased
+
+
+def tail_native_event_tokens(event_tokens: Iterable[int], seconds: float) -> List[int]:
+    """Keep and rebase a bounded tail for native continuation conditioning."""
+
+    if seconds <= 0:
+        raise ValueError("seconds must be positive")
+    tokens = [int(token_id) for token_id in event_tokens]
+    validate_native_event_tokens(tokens, allow_absolute_time_overflow=True)
+    if not tokens:
+        return []
+    final_time = max(tokens[0::3])
+    start = max(0, final_time - round(seconds * 100))
+    selected = [
+        token_id
+        for index in range(0, len(tokens), 3)
+        if tokens[index] >= start
+        for token_id in tokens[index : index + 3]
+    ]
+    return rebase_native_event_tokens(selected)
+
+
 def normalize_native_model_tokens(model_token_ids: Iterable[int]) -> Tuple[List[int], Dict[str, Any]]:
     """Shift generated model tokens into Anticipation event IDs and retain complete triples.
 

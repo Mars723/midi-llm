@@ -55,17 +55,25 @@ from midi_llm.native_backbone import (
     native_midi_stats,
     upstream_generation_prompt,
 )
+from midi_llm.native_checkpoint_selection import select_native_checkpoint
+from midi_llm.native_progress_report import ReviewInput, build_native_progress_report
 from midi_llm.native_tokens import (
     LLAMA_VOCAB_SIZE,
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
     native_event_tokens_to_model_tokens,
     normalize_native_model_tokens,
+    rebase_native_event_tokens,
     segment_native_event_tokens,
+    tail_native_event_tokens,
 )
 from midi_llm.native_whole_piece import (
+    analyze_boundaries,
     assemble_hierarchical_aba_piece,
     infer_key,
+    notation_directions,
+    performance_pedal_events,
     select_native_material,
+    sparse_voice_led_cadence,
 )
 from midi_llm.notation_analysis import analyze_notation
 from midi_llm.package_cloud import extract_cloud_bundle, package_cloud_dataset, verify_cloud_bundle
@@ -160,6 +168,23 @@ class ScoreFirstTest(unittest.TestCase):
                 {"start_time_token": 10000, "event_tokens": [1, 10002, 11062]},
             ],
         )
+
+    def test_native_continuation_prefix_keeps_and_rebases_bounded_tail(self):
+        tokens = [
+            100,
+            10_001,
+            11_060,
+            500,
+            10_001,
+            11_062,
+            900,
+            10_001,
+            11_064,
+        ]
+        self.assertEqual(rebase_native_event_tokens(tokens), [0, 10_001, 11_060, 400, 10_001, 11_062, 800, 10_001, 11_064])
+        self.assertEqual(tail_native_event_tokens(tokens, 5.0), [0, 10_001, 11_062, 400, 10_001, 11_064])
+        overflow_tokens = [10_100, 10_001, 11_060, 10_500, 10_001, 11_062, 10_900, 10_001, 11_064]
+        self.assertEqual(tail_native_event_tokens(overflow_tokens, 5.0), [0, 10_001, 11_062, 400, 10_001, 11_064])
 
     def test_native_backbone_manifest_keeps_native_midi_authoritative(self):
         config = NativeBackboneConfig(prompt="A solo piano nocturne.", output_dir="generated_native_backbone/test")
@@ -299,8 +324,13 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertTrue(manifest["completion"]["a_prime_reuses_theme_a"])
             self.assertEqual([section["label"] for section in manifest["sections"]], ["A", "B", "A'", "Coda"])
             self.assertGreater(len(parsed.notes), 10)
+            self.assertGreater(len(parsed.pedal), 0)
             self.assertTrue((output / "piece_plan.ir.json").exists())
             self.assertTrue((output / "motif_bank.ir.json").exists())
+            self.assertTrue((output / "score_draft" / "score.musicxml").exists())
+            musicxml = (output / "score_draft" / "score.musicxml").read_text(encoding="utf-8")
+            self.assertIn("<dynamics>", musicxml)
+            self.assertIn('<pedal type="start"', musicxml)
 
     def test_native_whole_piece_key_inference_prefers_c_minor(self):
         notes = [
@@ -312,6 +342,106 @@ class ScoreFirstTest(unittest.TestCase):
         root, mode = infer_key(notes)
         self.assertEqual(root, 0)
         self.assertEqual(mode, "minor")
+
+    def test_native_whole_piece_sparse_cadence_avoids_terminal_block_chord(self):
+        notes, _ = sparse_voice_led_cadence(
+            [MidiNote(tick=0, duration=480, pitch=67, velocity=64)],
+            root=0,
+            mode="minor",
+            offset=960,
+            ticks_per_beat=480,
+        )
+        counts = {}
+        for note in notes:
+            counts[note.tick] = counts.get(note.tick, 0) + 1
+        self.assertLessEqual(max(counts.values()), 3)
+        self.assertEqual(len(notes), 6)
+
+    def test_native_whole_piece_reports_boundary_shock_and_performance_pedal(self):
+        notes = [
+            MidiNote(tick=0, duration=480, pitch=48, velocity=64),
+            MidiNote(tick=0, duration=480, pitch=72, velocity=64),
+            MidiNote(tick=960, duration=480, pitch=55, velocity=64),
+            MidiNote(tick=960, duration=480, pitch=76, velocity=64),
+        ]
+        sections = [
+            ("A", "statement", 0, 480, "theme-a", "generated"),
+            ("B", "contrast", 960, 1440, "theme-b", "generated"),
+        ]
+        report = analyze_boundaries(notes, sections, 480)
+        self.assertEqual(report[0]["silence_gap_beats"], 1.0)
+        self.assertEqual(report[0]["pitch_distance"], 5.5)
+        self.assertEqual(len(performance_pedal_events(3840, 480)), 4)
+
+    def test_native_whole_piece_notation_directions_include_dynamics_wedge_and_pedal(self):
+        score, _ = self.build_score()
+        directions = notation_directions(score.plan)
+        kinds = {direction.kind for direction in directions}
+        self.assertTrue({"tempo", "dynamic", "wedge-start", "wedge-stop", "pedal-start", "pedal-stop"}.issubset(kinds))
+
+    def test_native_checkpoint_sweep_rejects_density_regression_and_selects_earliest_best(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay = root / "replay"
+            checkpoints = root / "training"
+            for step in (10, 20, 30):
+                (replay / f"checkpoint-{step}").mkdir(parents=True)
+                (replay / f"checkpoint-{step}" / "manifest.json").write_text("{}\n", encoding="utf-8")
+            baseline = {
+                "syntax_valid_rate": 1.0,
+                "density_drift_rate": 0.0,
+                "natural_stop_rate": 0.0,
+                "median_distinct_pitches": 20.0,
+            }
+            summaries = {
+                str(root / "baseline"): baseline,
+                str(replay / "checkpoint-10"): {**baseline, "median_distinct_pitches": 22.0},
+                str(replay / "checkpoint-20"): {**baseline, "density_drift_rate": 0.25, "median_distinct_pitches": 28.0},
+                str(replay / "checkpoint-30"): {**baseline, "median_distinct_pitches": 21.0},
+            }
+            with patch("midi_llm.native_checkpoint_selection.summarize_native_run", side_effect=lambda path: summaries[str(path)]):
+                report = select_native_checkpoint(root / "baseline", replay, checkpoints)
+            self.assertEqual(report["selected"]["step"], 10)
+            self.assertFalse(report["checkpoints"][1]["eligible"])
+            self.assertEqual(report["promotion_decision"], "selected-parity-preserving-checkpoint")
+
+    def test_native_progress_report_keeps_rejected_human_review_as_promotion_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            whole = root / "whole"
+            (whole / "score_draft").mkdir(parents=True)
+            (whole / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "stats": {"duration_seconds": 180.0, "estimated_measures": 60},
+                        "completion": {
+                            "all_planned_sections_realized": True,
+                            "future_termination_condition_realized": True,
+                        },
+                        "limitations": {"generated_score_markings": "inferred"},
+                        "performance_overlay": {"pedal_events": 120},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (whole / "score_draft" / "manifest.json").write_text(
+                json.dumps({"metrics": {"structural_score": 98.0}}),
+                encoding="utf-8",
+            )
+            summary = {
+                "syntax_valid_rate": 1.0,
+                "density_drift_rate": 0.0,
+                "natural_stop_rate": 0.0,
+            }
+            with patch("midi_llm.native_progress_report.summarize_native_run", return_value=summary):
+                report = build_native_progress_report(
+                    root / "baseline",
+                    root / "adapter",
+                    whole,
+                    human_review=ReviewInput(status="rejected", notes="Not coherent enough."),
+                )
+            self.assertEqual(report["estimated_improvement"]["musicality_over_upstream"], "not demonstrated")
+            self.assertEqual(report["estimated_improvement"]["promotion_decision"], "reject-promotion")
 
     def test_symupe_research_helpers_require_explicit_license_ack(self):
         with self.assertRaisesRegex(SystemExit, "CC-BY-NC-SA-4.0"):

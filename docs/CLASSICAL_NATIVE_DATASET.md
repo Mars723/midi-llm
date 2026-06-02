@@ -148,8 +148,8 @@ bash scripts/run_native_adapter_parity.sh \
 Do not mislabel a token-budget-capped parity replay as a complete composition.
 The upstream Anticipation absolute-time vocabulary covers an approximately
 `100`-second local window. Produce an interim whole-piece sample with a shared
-blueprint, independently generated A and B native materials, explicit A-prime
-motif reuse, and a realized coda termination target:
+blueprint, prefix-conditioned B and Coda materials, explicit A-prime motif
+reuse, and a realized coda termination target:
 
 ```bash
 bash scripts/generate_native_whole_piece_pilot.sh \
@@ -158,5 +158,34 @@ bash scripts/generate_native_whole_piece_pilot.sh \
 ```
 
 This interim generator is an honest structural milestone, not the release
-architecture. Its manifest records that boundary inpainting and generated
-notation markings are still pending.
+architecture. Its manifest records inferred draft markings separately from
+future model-generated notation and reports the remaining boundary quality.
+
+After each adapter stage, write an honest progress report against the fixed
+upstream replay and the current whole-piece sample. Human listening review is a
+required promotion input; automated structural scores cannot replace it:
+
+```bash
+bash scripts/report_native_training_progress.sh \
+  /root/midllm-local/generated_native_backbone/upstream_parity_nocturne_v1 \
+  /root/midllm-local/generated_native_backbone/native_classical_v1_pilot_chopin_nocturne_2046 \
+  /root/midllm-local/generated_native_backbone/native_classical_v1_whole_piece_001/piece \
+  /root/midllm-local/generated_native_backbone/native_classical_v1_progress \
+  pending \
+  'Awaiting listening review.'
+```
+
+If a bounded pilot regresses fixed-seed parity, do not continue training from
+its final adapter. Start a conservative low-learning-rate run and sweep each
+saved checkpoint:
+
+```bash
+bash scripts/run_native_classical_stages.sh conservative-pilot
+bash scripts/run_native_checkpoint_sweep.sh \
+  /root/midllm-local/training_runs/native_classical_v1/03_conservative_pilot
+```
+
+The conservative stage defaults to `60` optimizer steps, `5e-6` learning
+rate, and a checkpoint every `10` steps. The sweep rejects a checkpoint when
+its syntax-valid rate falls below upstream or its density-drift rate exceeds
+upstream. Generate a whole-piece sample only from the selected checkpoint.

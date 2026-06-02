@@ -15,7 +15,10 @@ from typing import Any, Dict, List
 from .import_midi import ParsedMidi, import_draft, parse_midi
 from .native_tokens import (
     NATIVE_MIDI_BOS_MODEL_TOKEN_ID,
+    native_event_tokens_to_model_tokens,
     normalize_native_model_tokens,
+    rebase_native_event_tokens,
+    tail_native_event_tokens,
 )
 
 
@@ -36,6 +39,8 @@ class NativeBackboneConfig:
     temperature: float = 1.0
     top_p: float = 0.98
     max_tokens: int = 2046
+    prefix_midi: str | None = None
+    prefix_tail_seconds: float = 18.0
     score_draft: bool = True
     render_score_draft: bool = False
 
@@ -53,6 +58,7 @@ def generate_native_backbone(config: NativeBackboneConfig) -> Path:
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     tokenizer, model, torch = _load_upstream_model(config.model, config.adapter)
+    prefix_model_tokens = _load_prefix_model_tokens(config.prefix_midi, config.prefix_tail_seconds)
     candidates: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
     for index in range(1, config.n_outputs + 1):
@@ -69,8 +75,11 @@ def generate_native_backbone(config: NativeBackboneConfig) -> Path:
                 temperature=config.temperature,
                 top_p=config.top_p,
                 max_tokens=config.max_tokens,
+                prefix_model_tokens=prefix_model_tokens,
             )
             event_tokens, normalization = normalize_native_model_tokens(model_token_ids)
+            if config.prefix_midi:
+                event_tokens = rebase_native_event_tokens(event_tokens)
             if not event_tokens:
                 raise ValueError("Upstream model produced no complete native MIDI events")
             _write_json(candidate_dir / "native.tokens.json", event_tokens)
@@ -132,6 +141,10 @@ def native_backbone_manifest(
         "representation": "upstream-native-anticipation-midi-tokens",
         "native_midi_is_authoritative_musical_content": True,
         "score_conversion_is_draft_only": True,
+        "prefix_conditioning": {
+            "prefix_midi": config.prefix_midi,
+            "prefix_tail_seconds": config.prefix_tail_seconds if config.prefix_midi else None,
+        },
         "prompt": config.prompt,
         "config": asdict(config),
         "candidates": candidates,
@@ -227,13 +240,15 @@ def _sample_native_model_tokens(
     temperature: float,
     top_p: float,
     max_tokens: int,
+    prefix_model_tokens: List[int] | None = None,
 ) -> List[int]:
     """Use the upstream prompt, MIDI BOS token, and native token distribution unchanged."""
 
     torch.manual_seed(seed)
     llama_input = tokenizer(upstream_generation_prompt(prompt), return_tensors="pt", padding=False)
     midi_bos = torch.tensor([[NATIVE_MIDI_BOS_MODEL_TOKEN_ID]])
-    input_ids = torch.cat([llama_input["input_ids"], midi_bos], dim=1).to(next(model.parameters()).device)
+    native_prefix = torch.tensor([prefix_model_tokens or []])
+    input_ids = torch.cat([llama_input["input_ids"], midi_bos, native_prefix], dim=1).to(next(model.parameters()).device)
     with torch.no_grad():
         output = model.generate(
             input_ids=input_ids,
@@ -245,6 +260,20 @@ def _sample_native_model_tokens(
             pad_token_id=tokenizer.pad_token_id,
         )
     return output[0][input_ids.shape[1] :].detach().cpu().tolist()
+
+
+def _load_prefix_model_tokens(prefix_midi: str | None, tail_seconds: float) -> List[int]:
+    if not prefix_midi:
+        return []
+    try:
+        from anticipation.convert import midi_to_events
+    except ImportError as error:
+        raise RuntimeError("Install anticipation before using native MIDI prefix conditioning") from error
+    path = Path(prefix_midi)
+    if not path.exists():
+        raise OSError(f"Native MIDI prefix does not exist: {path}")
+    event_tokens = tail_native_event_tokens(midi_to_events(str(path)), tail_seconds)
+    return native_event_tokens_to_model_tokens(event_tokens, include_bos=False)
 
 
 def _write_native_midi(event_tokens: List[int], path: Path) -> Path:
@@ -302,6 +331,8 @@ def _validate_config(config: NativeBackboneConfig) -> None:
         raise ValueError("temperature must be positive")
     if not 0 < config.top_p <= 1:
         raise ValueError("top_p must be in the interval (0, 1]")
+    if config.prefix_tail_seconds <= 0:
+        raise ValueError("prefix_tail_seconds must be positive")
 
 
 def _default_output_dir() -> str:
@@ -320,6 +351,8 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.98)
     parser.add_argument("--max-tokens", type=int, default=2046)
+    parser.add_argument("--prefix-midi", help="Optional native MIDI whose tail conditions continuation sampling")
+    parser.add_argument("--prefix-tail-seconds", type=float, default=18.0)
     parser.add_argument("--skip-score-draft", action="store_true")
     parser.add_argument("--render-score-draft", action="store_true")
     args = parser.parse_args()
@@ -334,6 +367,8 @@ def main() -> None:
             temperature=args.temperature,
             top_p=args.top_p,
             max_tokens=args.max_tokens,
+            prefix_midi=args.prefix_midi,
+            prefix_tail_seconds=args.prefix_tail_seconds,
             score_draft=not args.skip_score_draft,
             render_score_draft=args.render_score_draft,
         )
