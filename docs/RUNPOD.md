@@ -60,6 +60,24 @@ bash scripts/run_native_classical_stages.sh dry-run
 bash scripts/run_native_classical_stages.sh smoke
 ```
 
+Active native-token training belongs on the disposable `/root` disk. Protect
+completed checkpoints with the native watcher, which writes stable archives
+to the persistent volume and optionally to Google Drive:
+
+```bash
+bash scripts/run_native_classical_stages.sh pilot > /root/midllm-local/logs/native-classical-v1-02-pilot.log 2>&1 &
+TRAINING_PID=$!
+MIDI_LLM_NATIVE_LOG=/root/midllm-local/logs/native-classical-v1-02-pilot.log \
+MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod/score-first-intermediate-v2/native-classical-v1' \
+  bash scripts/watch_native_classical_backup.sh \
+  "$TRAINING_PID" \
+  /root/midllm-local/training_runs/native_classical_v1/02_pilot \
+  native_classical_v1_02_pilot
+```
+
+The rclone configuration stays on ephemeral `/root`; do not copy OAuth
+credentials into `/workspace` or Drive.
+
 The direct ScoreDSL adapter commands below remain available for research
 comparison. They are not the default quality path.
 

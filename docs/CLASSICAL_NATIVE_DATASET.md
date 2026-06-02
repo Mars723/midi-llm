@@ -111,6 +111,28 @@ learning rate of `2e-5`:
 bash scripts/run_native_classical_stages.sh pilot
 ```
 
+Keep active training on the disposable local disk and archive only completed
+Trainer checkpoints to the Runpod persistent volume. When an ephemeral
+`rclone` Drive remote is configured, the watcher also copies each stable
+archive offsite:
+
+```bash
+bash scripts/run_native_classical_stages.sh pilot > /root/midllm-local/logs/native-classical-v1-02-pilot.log 2>&1 &
+TRAINING_PID=$!
+MIDI_LLM_NATIVE_LOG=/root/midllm-local/logs/native-classical-v1-02-pilot.log \
+MIDI_LLM_RCLONE_REMOTE='gdrive:MIDI-LLM/runpod/score-first-intermediate-v2/native-classical-v1' \
+  bash scripts/watch_native_classical_backup.sh \
+  "$TRAINING_PID" \
+  /root/midllm-local/training_runs/native_classical_v1/02_pilot \
+  native_classical_v1_02_pilot
+```
+
+The watcher does not sync an actively changing directory into the persistent
+network mount. It packages a checkpoint only after `trainer_state.json`
+exists, then copies the stable archive and SHA-256 file to persistent storage
+and Drive. Keep the OAuth-bearing rclone configuration on `/root`, which is
+intentionally disposable.
+
 Generate fixed-seed upstream and adapter candidates after each checkpoint.
 Reject a checkpoint if native MIDI validity, density drift, or baseline prompt
 quality regresses, even when its training loss decreases.
