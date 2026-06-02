@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import shutil
 from typing import Any, Dict, Iterable, List, Optional
 
 from .native_backbone import upstream_generation_prompt
@@ -26,6 +27,8 @@ def materialize_native_training_dataset(
     root = Path(dataset_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     tokens_dir = output_dir / "tokens"
+    if tokens_dir.exists():
+        shutil.rmtree(tokens_dir)
     tokens_dir.mkdir(exist_ok=True)
     split_rows: Dict[str, List[Dict[str, Any]]] = {split: [] for split in ("train", "valid", "test")}
     errors: List[Dict[str, str]] = []

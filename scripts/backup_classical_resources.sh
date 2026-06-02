@@ -12,7 +12,7 @@ SNAPSHOT="$BACKUP_ROOT/snapshots/$STAMP"
 
 mkdir -p "$SNAPSHOT" "$BACKUP_ROOT/latest"
 MANIFEST_DIRS=()
-for name in pdmx-native-classical-v3 mutopia-piano-v1 classical-resource-inventory-v1 maestro-performance-v3; do
+for name in pdmx-native-classical-v3 mutopia-piano-v1 classical-resource-inventory-v1 maestro-performance-v3 pianocore-metadata-v1; do
   [[ -d "$MANIFEST_ROOT/$name" ]] && MANIFEST_DIRS+=("$name")
 done
 if [[ ${#MANIFEST_DIRS[@]} -eq 0 ]]; then
@@ -24,6 +24,14 @@ if [[ -d "$RESOURCE_ROOT/maestro" ]]; then
   find "$RESOURCE_ROOT/maestro" -maxdepth 1 -type f \
     \( -name '*.zip' -o -name '*.csv' -o -name '*.json' \) \
     -exec shasum -a 256 {} + > "$SNAPSHOT/maestro-resource-checksums.sha256"
+fi
+if [[ -d "$RESOURCE_ROOT/pianocore-metadata" ]]; then
+  find "$RESOURCE_ROOT/pianocore-metadata" -maxdepth 1 -type f -name '*.csv' \
+    -exec shasum -a 256 {} + > "$SNAPSHOT/pianocore-metadata-resource-checksums.sha256"
+fi
+if [[ -d "$RESOURCE_ROOT/toolchains" ]]; then
+  find "$RESOURCE_ROOT/toolchains" -maxdepth 1 -type f -name 'lilypond-*.tar.gz' \
+    -exec shasum -a 256 {} + > "$SNAPSHOT/toolchain-resource-checksums.sha256"
 fi
 tar -czf "$SNAPSHOT/classical-resource-manifests.tar.gz" -C "$MANIFEST_ROOT" "${MANIFEST_DIRS[@]}"
 sha256sum "$SNAPSHOT/classical-resource-manifests.tar.gz" > "$SNAPSHOT/classical-resource-manifests.tar.gz.sha256"
@@ -52,6 +60,16 @@ if [[ "$BACKUP_ARCHIVES" != 0 ]]; then
   mkdir -p "$BACKUP_ROOT/resources/pdmx"
   rsync -a "$RESOURCE_ROOT/pdmx/" "$BACKUP_ROOT/resources/pdmx/" \
     --include '*/' --include '*.tar.gz' --include '*.csv' --include 'fetch_summary.json' --exclude '*'
+  if [[ -d "$RESOURCE_ROOT/pianocore-metadata" ]]; then
+    mkdir -p "$BACKUP_ROOT/resources/pianocore-metadata"
+    rsync -a "$RESOURCE_ROOT/pianocore-metadata/" "$BACKUP_ROOT/resources/pianocore-metadata/" \
+      --include '*.csv' --exclude '*'
+  fi
+  if [[ -d "$RESOURCE_ROOT/toolchains" ]]; then
+    mkdir -p "$BACKUP_ROOT/resources/toolchains"
+    rsync -a "$RESOURCE_ROOT/toolchains/" "$BACKUP_ROOT/resources/toolchains/" \
+      --include 'lilypond-*.tar.gz' --exclude '*'
+  fi
 fi
 
 if [[ -n "$RCLONE_REMOTE" ]]; then

@@ -6,6 +6,7 @@ RESOURCE_ROOT=${MIDI_LLM_PDMX_ROOT:-"$ROOT/training_resources/pdmx"}
 MANIFEST_ROOT=${MIDI_LLM_NATIVE_MANIFEST_ROOT:-"$ROOT/training_manifests/pdmx-native-classical-v3"}
 CORE_COMPOSERS=${MIDI_LLM_NATIVE_CORE_COMPOSERS:-bach,mozart,beethoven,chopin}
 CONNECTIONS=${MIDI_LLM_PDMX_CONNECTIONS:-6}
+MAX_EVENT_TOKENS=${MIDI_LLM_NATIVE_MAX_EVENT_TOKENS:-7800}
 PHASE=${1:-all}
 
 cd "$ROOT"
@@ -36,6 +37,14 @@ prepare_manifests() {
 
   python3 -m midi_llm.prepare_pdmx \
     --metadata-csv "$RESOURCE_ROOT/PDMX.csv" \
+    --output-dir "$MANIFEST_ROOT/intermediate-canonical" \
+    --difficulty intermediate \
+    --quality canonical-core \
+    --min-measures 32 \
+    --max-measures 256
+
+  python3 -m midi_llm.prepare_pdmx \
+    --metadata-csv "$RESOURCE_ROOT/PDMX.csv" \
     --output-dir "$MANIFEST_ROOT/core-four-composers-intermediate" \
     --composers "$CORE_COMPOSERS" \
     --difficulty intermediate \
@@ -50,7 +59,12 @@ prepare_manifests() {
   python3 -m midi_llm.merge_manifests \
     --manifest "$MANIFEST_ROOT/core-four-composers-intermediate/pdmx_score_first_manifest.jsonl" \
     --manifest "$MANIFEST_ROOT/intermediate-curated/pdmx_score_first_manifest.jsonl" \
-    --output "$MANIFEST_ROOT/training_view_manifest.jsonl"
+    --output "$MANIFEST_ROOT/medium_collected_view_manifest.jsonl"
+
+  python3 -m midi_llm.merge_manifests \
+    --manifest "$MANIFEST_ROOT/core-four-composers-intermediate/pdmx_score_first_manifest.jsonl" \
+    --manifest "$MANIFEST_ROOT/intermediate-canonical/pdmx_score_first_manifest.jsonl" \
+    --output "$MANIFEST_ROOT/composition_core_training_view_manifest.jsonl"
 
   python3 -m midi_llm.dataset_audit \
     --manifest "$MANIFEST_ROOT/collected_manifest.jsonl" \
@@ -65,9 +79,9 @@ prepare_manifests() {
     --min-composer-works 10
 
   python3 -m midi_llm.dataset_audit \
-    --manifest "$MANIFEST_ROOT/training_view_manifest.jsonl" \
+    --manifest "$MANIFEST_ROOT/composition_core_training_view_manifest.jsonl" \
     --dataset-root "$RESOURCE_ROOT" \
-    --output-dir "$MANIFEST_ROOT/audit-training-view" \
+    --output-dir "$MANIFEST_ROOT/audit-composition-core-training-view" \
     --min-composer-works 10
 }
 
@@ -102,16 +116,17 @@ extract_resources() {
 
 materialize_tokens() {
   python3 -m midi_llm.materialize_native_training \
-    --manifest "$MANIFEST_ROOT/training_view_manifest.jsonl" \
+    --manifest "$MANIFEST_ROOT/composition_core_training_view_manifest.jsonl" \
     --dataset-root "$RESOURCE_ROOT" \
-    --output-dir "$MANIFEST_ROOT/native_tokens_training_view"
+    --output-dir "$MANIFEST_ROOT/native_tokens_training_view" \
+    --max-event-tokens "$MAX_EVENT_TOKENS"
 }
 
 audit_notation() {
   python3 -m midi_llm.notation_corpus_audit \
-    --manifest "$MANIFEST_ROOT/training_view_manifest.jsonl" \
+    --manifest "$MANIFEST_ROOT/medium_collected_view_manifest.jsonl" \
     --dataset-root "$RESOURCE_ROOT" \
-    --output-dir "$MANIFEST_ROOT/notation-audit-training-view"
+    --output-dir "$MANIFEST_ROOT/notation-audit-medium-collected-view"
 }
 
 case "$PHASE" in

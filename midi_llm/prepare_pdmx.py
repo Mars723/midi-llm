@@ -49,12 +49,15 @@ QUALITY_FILTERS = ("metadata-curated", "canonical-core")
 GENERIC_GENRES = ("classical-piano", "unclassified-piano")
 COMPOSER_STYLE_PERIODS = {
     "albinoni": "baroque",
+    "albeniz": "romantic",
     "alkan": "romantic",
     "arensky": "romantic",
     "bach": "baroque",
     "balakirev": "romantic",
     "bartok": "modern",
     "beethoven": "classical-romantic-transition",
+    "bizet": "romantic",
+    "blumenfeld": "romantic",
     "borodin": "romantic",
     "brahms": "romantic",
     "burgmuller": "romantic",
@@ -65,26 +68,36 @@ COMPOSER_STYLE_PERIODS = {
     "czerny": "classical-romantic-transition",
     "debussy": "impressionist",
     "dvorak": "romantic",
+    "dussek": "classical",
+    "elgar": "romantic",
     "faure": "romantic",
+    "field": "romantic",
+    "franck": "romantic",
     "frescobaldi": "baroque",
+    "froberger": "baroque",
     "glazunov": "romantic",
     "gounod": "romantic",
+    "gottschalk": "romantic",
     "grieg": "romantic",
     "handel": "baroque",
     "hanon": "romantic",
     "haydn": "classical",
     "heller": "romantic",
+    "joplin": "romantic",
     "kabalevsky": "modern",
     "korsakov": "romantic",
     "kuhlau": "classical-romantic-transition",
     "liszt": "romantic",
     "lully": "baroque",
+    "lyadov": "romantic",
     "mendelssohn": "romantic",
     "monteverdi": "baroque",
     "moszkowski": "romantic",
     "mussorgsky": "romantic",
+    "nazareth": "romantic",
     "mozart": "classical",
     "offenbach": "romantic",
+    "oswald": "romantic",
     "pachelbel": "baroque",
     "poulenc": "modern",
     "prokofiev": "modern",
@@ -92,13 +105,16 @@ COMPOSER_STYLE_PERIODS = {
     "rachmaninoff": "romantic",
     "rameau": "baroque",
     "ravel": "impressionist",
+    "rossini": "romantic",
     "satie": "modern",
     "scarlatti": "baroque",
     "schubert": "classical-romantic-transition",
     "schumann": "romantic",
     "scriabin": "romantic",
     "shostakovich": "modern",
+    "smetana": "romantic",
     "strauss": "romantic",
+    "stanchinsky": "modern",
     "taneyev": "romantic",
     "telemann": "baroque",
     "tchaikovsky": "romantic",
@@ -363,17 +379,22 @@ def _form_label(row: Dict[str, str], genre: str) -> Tuple[str, Dict[str, str]]:
 
 
 def _composer_style_label(row: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
-    field = "composer" if row.get("composer") else "composer_name"
-    composer = _normalize_text(row.get(field, ""))
-    for style in CANONICAL_CLASSICAL_COMPOSERS:
-        if _phrase_present(composer, style):
-            return style, {
-                "field": field,
-                "matched": style,
-                "policy": "canonical-surname-metadata",
-            }
+    fields = ("composer", "composer_name", "artist_name", "title", "song_name")
+    for field in fields:
+        value = _normalize_text(row.get(field, ""))
+        for style in CANONICAL_CLASSICAL_COMPOSERS:
+            if _phrase_present(value, style):
+                return style, {
+                    "field": field,
+                    "matched": style,
+                    "policy": (
+                        "canonical-surname-metadata"
+                        if field in ("composer", "composer_name")
+                        else "canonical-surname-fallback"
+                    ),
+                }
     return "unclassified-composer", {
-        "field": field,
+        "field": "",
         "matched": "",
         "policy": "conservative-default",
     }

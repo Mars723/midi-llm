@@ -44,9 +44,13 @@ builds three separate views:
 - `collected_manifest.jsonl`: the full four-composer core plus curated
   intermediate expansion works. Preserve this broad collection for later
   refinement.
-- `training_view_manifest.jsonl`: the first conservative medium-difficulty
-  training view. It retains intermediate works between `32` and `256`
-  measures and does not silently mix in collected outliers.
+- `medium_collected_view_manifest.jsonl`: the broader intermediate collection
+  between `32` and `256` measures. Keep it for notation audits and later
+  metadata repair; it is not automatically promoted to the composition model.
+- `composition_core_training_view_manifest.jsonl`: the first conservative
+  composition-backbone view. It combines the four-composer intermediate core
+  with `canonical-core` intermediate works and does not silently mix in
+  collected outliers or generic uploaded arrangements.
 
 Build and audit the manifests:
 
@@ -63,7 +67,7 @@ bash scripts/prepare_native_classical_resources.sh extract
 bash scripts/prepare_native_classical_resources.sh extract-catalog-midi
 ```
 
-Materialize the strict medium-difficulty training view in the upstream
+Materialize the strict composition-core training view in the upstream
 extended vocabulary:
 
 ```bash
@@ -88,6 +92,12 @@ range, so long pieces are covered by rebased native time windows while the
 complete source MIDI and work-level controls remain intact. A segment that
 still exceeds an explicitly configured context budget is recorded separately
 instead of being truncated.
+
+The resource helper defaults to `7800` event tokens per native segment so the
+prompt, MIDI BOS token, segment, and EOS fit the initial `8192`-token training
+context. A work with any denser segment is written to
+`oversized_complete_pieces.jsonl` and excluded from the first training view
+without truncation.
 
 ## Supplemental Source
 
@@ -115,6 +125,31 @@ and ensemble files. It distinguishes `solo-piano` from
 repository commit and SHA-256, and labels every result
 `supplemental-unreviewed`. It records legacy sources without an explicit
 license declaration for manual review instead of silently promoting them.
+
+Compile the selected LilyPond sources into a separate review-only view. The
+bootstrap helper downloads the pinned official LilyPond `2.26.0` macOS runtime,
+verifies its SHA-256, and keeps it under ignored resource storage. Compilation
+records syntax failures, timeouts, and whether a MIDI file was actually
+produced; successful source collection alone never promotes a work. Each work
+also gets a source-hash-bound `compile_result.json`, so repeated runs resume
+without recompiling unchanged sources. The compiler emits a separate
+`clean_midi_review_candidates.jsonl` view that requires a clean compile,
+recognized composer, and explicit license evidence. These rows still require
+difficulty and musical review before promotion:
+
+```bash
+bash scripts/bootstrap_lilypond_runtime.sh
+MIDI_LLM_MUTOPIA_COMPILE_LIMIT=20 bash scripts/compile_mutopia_resources.sh
+bash scripts/compile_mutopia_resources.sh
+bash scripts/profile_mutopia_resources.sh
+bash scripts/materialize_mutopia_review_tokens.sh
+```
+
+The final profile helper reads only clean solo-piano MIDI candidates. It
+rejects empty, abnormally dense, very short, and implausibly long outputs into
+separate review queues. Its bounded-piece view is still not a difficulty label
+and remains outside the composition backbone until musical review. Native
+tokens from this view are also review-only preprocessing artifacts.
 
 Native-token conversion is CPU-only. Prepare the local converter without
 allocating a GPU:
@@ -147,6 +182,16 @@ bash scripts/collect_maestro_performance_resources.sh
 The generated rows are labeled
 `non-commercial-research-performance-overlay-only` and
 `composition_backbone_eligible=false`.
+
+PianoCoRe `1.0` is another isolated non-commercial research source. Collect
+only its official metadata first; do not download or merge its large archive
+into the composition backbone. The generated inventory records score source,
+performance source, alignment tier, and quality fields while forcing
+`composition_backbone_eligible=false`:
+
+```bash
+bash scripts/collect_pianocore_metadata_resources.sh
+```
 
 ## Next Training Gate
 

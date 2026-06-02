@@ -15,6 +15,7 @@ import zipfile
 
 from midi_llm.compiler import find_musescore, render_musescore, write_musicxml, write_performance_midi
 from midi_llm.collect_mutopia import _instrument_tier, _license, collect_mutopia_sources
+from midi_llm.compile_mutopia import _bounded, _clean_midi_review_candidates, _compile_row, _relative_outputs
 from midi_llm.compose import compose
 from midi_llm.curriculum import prepare_curriculum
 from midi_llm.evaluate import evaluate_score
@@ -93,6 +94,8 @@ from midi_llm.prepare_pdmx import (
     prepare_manifest,
 )
 from midi_llm.prepare_maestro import prepare_maestro_manifest
+from midi_llm.prepare_pianocore import _inventory_row as pianocore_inventory_row
+from midi_llm.profile_mutopia_midi import _is_medium_piece_review_candidate, _preferred_midi_path
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
 from midi_llm.research_symupe import (
@@ -1160,6 +1163,12 @@ class ScoreFirstTest(unittest.TestCase):
             "bach",
         )
 
+    def test_pdmx_composer_style_can_use_title_fallback_with_evidence(self):
+        style, evidence = _composer_style_label({"composer_name": "NA", "title": "Prelude op. 11 - Anatoly Lyadov"})
+        self.assertEqual(style, "lyadov")
+        self.assertEqual(evidence["field"], "title")
+        self.assertEqual(evidence["policy"], "canonical-surname-fallback")
+
     def test_pdmx_midi_manifest_paths_select_native_sources(self):
         with tempfile.TemporaryDirectory() as raw_dir:
             manifest = Path(raw_dir) / "manifest.jsonl"
@@ -1225,6 +1234,9 @@ class ScoreFirstTest(unittest.TestCase):
                 json.dumps({"work_id": "large", "split": "train", "native_midi_path": "source.mid"}) + "\n",
                 encoding="utf-8",
             )
+            stale_tokens = root / "native" / "tokens"
+            stale_tokens.mkdir(parents=True)
+            (stale_tokens / "stale.model_tokens.json").write_text("[]\n", encoding="utf-8")
             with patch(
                 "midi_llm.materialize_native_training._midi_to_event_tokens",
                 return_value=[1, 10_002, 11_003, 4, 10_005, 11_006],
@@ -1232,6 +1244,7 @@ class ScoreFirstTest(unittest.TestCase):
                 summary = materialize_native_training_dataset(manifest, root / "native", root, max_event_tokens=3)
             self.assertEqual(summary["examples_written"], 0)
             self.assertEqual(summary["examples_excluded_oversized"], 1)
+            self.assertFalse((stale_tokens / "stale.model_tokens.json").exists())
 
     def test_native_training_spec_caps_long_works_and_requires_parity_replay(self):
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -1920,6 +1933,73 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(row["composer_style"], "bach")
             self.assertEqual(row["source_license"], "cc-by-4.0")
             self.assertEqual(row["instrument_tier"], "solo-piano")
+
+    def test_mutopia_compiler_lists_relative_outputs_and_bounds_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work_dir = root / "compiled" / "abc"
+            work_dir.mkdir(parents=True)
+            (work_dir / "score.midi").touch()
+            (work_dir / "score.pdf").touch()
+            self.assertEqual(_relative_outputs(work_dir, ("*.mid", "*.midi")), ["compiled/abc/score.midi"])
+            self.assertEqual(_relative_outputs(work_dir, ("*.pdf",)), ["compiled/abc/score.pdf"])
+            self.assertEqual(_bounded("abcdef", 3), "def")
+
+    def test_mutopia_compiler_distinguishes_midi_with_legacy_compile_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source" / "score.ly"
+            source.parent.mkdir()
+            source.write_text(r"\score { c'4 }", encoding="utf-8")
+
+            def run_with_legacy_error(command, **_):
+                Path(command[command.index("-o") + 1]).with_suffix(".midi").touch()
+                return argparse.Namespace(returncode=1, stderr="legacy syntax error")
+
+            with patch("midi_llm.compile_mutopia.subprocess.run", side_effect=run_with_legacy_error):
+                row = _compile_row(
+                    {"work_id": "abc", "path": "source/score.ly"},
+                    root,
+                    root / "compiled",
+                    Path("/fake/lilypond"),
+                    120,
+                )
+            self.assertEqual(row["compile_status"], "midi-with-compile-errors")
+            self.assertEqual(row["compiled_midi_paths"], ["compiled/abc/score.midi"])
+
+    def test_mutopia_clean_midi_review_candidates_require_clean_compile_license_and_composer(self):
+        row = {
+            "compile_status": "success-with-midi",
+            "composer_style": "bach",
+            "license_evidence": "declared-in-lilypond-source",
+        }
+        self.assertEqual(_clean_midi_review_candidates([row]), [row])
+        self.assertEqual(_clean_midi_review_candidates([{**row, "compile_status": "midi-with-compile-errors"}]), [])
+        self.assertEqual(_clean_midi_review_candidates([{**row, "composer_style": "unclassified-composer"}]), [])
+        self.assertEqual(_clean_midi_review_candidates([{**row, "license_evidence": "requires-manual-license-review"}]), [])
+
+    def test_pianocore_inventory_is_explicitly_non_commercial_and_not_composition_training(self):
+        source = {
+            field: ""
+            for field in (
+                "id split composer composition movement score_dataset score_id score_xml_path score_midi_path "
+                "performance_id performance_dataset performance_midi_path quality_label tier_b tier_a tier_a_star "
+                "is_transcription is_duplicate is_refined refined_score_midi_path refined_performance_midi_path "
+                "refined_alignment_path"
+            ).split()
+        }
+        source["id"] = "PianoCoRe_000001"
+        row = pianocore_inventory_row(source)
+        self.assertFalse(row["commercial_use_allowed"])
+        self.assertFalse(row["composition_backbone_eligible"])
+        self.assertIn("non-commercial-research", row["use_channel"])
+
+    def test_mutopia_midi_profile_prefers_full_score_and_keeps_difficulty_unreviewed(self):
+        self.assertEqual(_preferred_midi_path(["compiled/abc/score-1.midi", "compiled/abc/score.midi"]), "compiled/abc/score.midi")
+        row = {"stats": {"duration_seconds": 120, "notes": 256, "potential_density_drift": False}}
+        self.assertTrue(_is_medium_piece_review_candidate(row))
+        self.assertFalse(_is_medium_piece_review_candidate({"stats": {**row["stats"], "duration_seconds": 10}}))
+        self.assertFalse(_is_medium_piece_review_candidate({"stats": {**row["stats"], "potential_density_drift": True}}))
 
     def test_notation_corpus_audit_profiles_expressive_two_staff_mxl(self):
         with tempfile.TemporaryDirectory() as raw_dir:
