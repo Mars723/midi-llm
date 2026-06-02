@@ -35,6 +35,7 @@ def audit_manifest(
     unclassified_composer_count = composer_counts["unclassified-composer"] + composer_counts["missing"]
     genre_counts = Counter(str(row.get("genre") or "missing") for row in rows)
     unclassified_genre_count = genre_counts["unclassified-piano"] + genre_counts["missing"]
+    review_queue_counts = _review_queue_counts(rows)
     composer_requirements = {
         composer: {
             "works": composer_counts[composer],
@@ -89,6 +90,7 @@ def audit_manifest(
             "missing_source_license_count": source_license_missing,
             "license_review_required_before_commercial_release": True,
         },
+        "review_queue_counts": review_queue_counts,
         "checks": checks,
         "ready": all(checks.values()),
     }
@@ -103,6 +105,21 @@ def write_audit_report(report: Dict[str, Any], output_dir: Path | str) -> Dict[s
     json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(_markdown_report(report), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(markdown_path)}
+
+
+def write_review_queues(manifest: Path | str, output_dir: Path | str) -> Dict[str, str]:
+    """Write auditable queues for later metadata repair without mutating source rows."""
+
+    rows = _read_jsonl(Path(manifest))
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    queues = _review_queues(rows)
+    outputs = {}
+    for name, queue_rows in queues.items():
+        path = output_dir / f"review_{name}.jsonl"
+        _write_jsonl(path, queue_rows)
+        outputs[name] = str(path)
+    return outputs
 
 
 def _markdown_report(report: Dict[str, Any]) -> str:
@@ -130,6 +147,10 @@ def _markdown_report(report: Dict[str, Any]) -> str:
 ## Checks
 
 {checks}
+
+## Review Queues
+
+{chr(10).join(f"- `{name}`: **{count}**" for name, count in report['review_queue_counts'].items())}
 """
 
 
@@ -163,6 +184,34 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def _review_queue_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {name: len(queue_rows) for name, queue_rows in _review_queues(rows).items()}
+
+
+def _review_queues(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    return {
+        "unclassified_composer": [
+            row for row in rows if str(row.get("composer_style") or "") in ("", "unclassified-composer")
+        ],
+        "unclassified_genre": [
+            row for row in rows if str(row.get("genre") or "") in ("", "unclassified-piano")
+        ],
+        "license": [row for row in rows if not str(row.get("source_license") or "").strip() or "unspecified" in str(row.get("source_license"))],
+        "measure_outliers": [
+            row
+            for row in rows
+            if row.get("measure_count") not in (None, "")
+            and (float(row["measure_count"]) < 16 or float(row["measure_count"]) > 512)
+        ],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit a collected classical-piano manifest")
     parser.add_argument("--manifest", required=True)
@@ -181,7 +230,8 @@ def main() -> None:
         expect_files=args.expect_files,
     )
     outputs = write_audit_report(report, args.output_dir)
-    print(json.dumps({**report, "artifacts": outputs}, indent=2))
+    queues = write_review_queues(args.manifest, args.output_dir)
+    print(json.dumps({**report, "artifacts": {**outputs, "review_queues": queues}}, indent=2))
     raise SystemExit(0 if report["ready"] or not args.enforce else 1)
 
 

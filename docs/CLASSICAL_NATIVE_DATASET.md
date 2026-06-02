@@ -77,6 +77,11 @@ tempo, dynamics, pedal, wedge, articulation, and fingering events. This keeps
 the future score-marking editor supervised by evidence instead of assuming
 that every composition source contains professional engraving detail.
 
+Each dataset audit also writes explicit review queues for unclassified
+composers, unclassified genres, licenses needing manual review, and implausible
+measure-count outliers. Catalog rows remain collected, but queued rows are not
+silently promoted into the strict training view.
+
 The materializer never truncates an oversized complete work. Anticipation uses
 segment-local absolute time tokens with an approximately 100-second vocabulary
 range, so long pieces are covered by rebased native time windows while the

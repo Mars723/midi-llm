@@ -28,7 +28,7 @@ from midi_llm.fetch_pdmx import (
     _split_range,
     _validate_coverage,
 )
-from midi_llm.dataset_audit import audit_manifest, write_audit_report
+from midi_llm.dataset_audit import audit_manifest, write_audit_report, write_review_queues
 from midi_llm.gallery import write_gallery
 from midi_llm.generate_checkpoint import (
     _CandidateFileStreamer,
@@ -1851,6 +1851,8 @@ class ScoreFirstTest(unittest.TestCase):
             self.assertEqual(report["files"]["native_midi_files_extracted"], 4)
             artifacts = write_audit_report(report, root / "audit")
             self.assertIn("Required Composer Coverage", Path(artifacts["markdown"]).read_text(encoding="utf-8"))
+            queues = write_review_queues(manifest, root / "audit")
+            self.assertEqual(Path(queues["measure_outliers"]).read_text(encoding="utf-8"), "")
 
     def test_pdmx_range_download_retries_connection_failure(self):
         class Response(io.BytesIO):
