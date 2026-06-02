@@ -13,6 +13,8 @@ LOCAL_ROOT=${MIDI_LLM_NATIVE_LOCAL_BACKUP_ROOT:-/root/midllm-local/native-classi
 PERSIST_ROOT=${MIDI_LLM_NATIVE_BACKUP_ROOT:-/workspace/midllm-backups/native-classical-v1}
 RCLONE_REMOTE=${MIDI_LLM_RCLONE_REMOTE:-}
 RCLONE=${MIDI_LLM_RCLONE_BIN:-rclone}
+RCLONE_TIMEOUT=${MIDI_LLM_NATIVE_RCLONE_TIMEOUT:-600}
+RCLONE_LOG_TIMEOUT=${MIDI_LLM_NATIVE_RCLONE_LOG_TIMEOUT:-60}
 INTERVAL=${MIDI_LLM_NATIVE_BACKUP_INTERVAL:-15}
 LOG=${MIDI_LLM_NATIVE_LOG:-}
 
@@ -38,7 +40,8 @@ copy_stable_file() {
   fi
 
   if [[ -n "$RCLONE_REMOTE" && ! -f "$remote_marker" ]]; then
-    if "$RCLONE" copyto "$source" "$RCLONE_REMOTE/$STAGE/$(basename "$source")"; then
+    if timeout --foreground "$RCLONE_TIMEOUT" \
+      "$RCLONE" copyto "$source" "$RCLONE_REMOTE/$STAGE/$(basename "$source")"; then
       touch "$remote_marker"
     else
       echo "Drive upload failed; will retry: $source" >&2
@@ -82,7 +85,8 @@ snapshot_log() {
   cp "$snapshot" "$PERSIST_STAGE/$(basename "$snapshot").tmp"
   mv "$PERSIST_STAGE/$(basename "$snapshot").tmp" "$PERSIST_STAGE/$(basename "$snapshot")"
   if [[ -n "$RCLONE_REMOTE" ]]; then
-    "$RCLONE" copyto "$snapshot" "$RCLONE_REMOTE/$STAGE/$(basename "$snapshot")" || \
+    timeout --foreground "$RCLONE_LOG_TIMEOUT" \
+      "$RCLONE" copyto "$snapshot" "$RCLONE_REMOTE/$STAGE/$(basename "$snapshot")" || \
       echo "Drive log upload failed; will retry: $snapshot" >&2
   fi
 }
