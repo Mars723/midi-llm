@@ -59,6 +59,7 @@ from midi_llm.native_backbone import (
     generate_native_backbone,
     native_backbone_manifest,
     native_midi_stats,
+    _sample_native_model_tokens,
     upstream_generation_prompt,
 )
 from midi_llm.native_checkpoint_selection import select_native_checkpoint
@@ -159,6 +160,48 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertEqual(tokens, [1, 2, 3])
         self.assertEqual(report["dropped_incomplete_event_tokens"], 2)
         self.assertEqual(report["stop_model_token_id"], 128_009)
+
+    def test_native_backbone_sampling_keeps_empty_prefix_ids_integer_typed(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is not installed")
+
+        captured = {}
+
+        class Tokenizer:
+            pad_token_id = 0
+
+            def __call__(self, prompt, return_tensors, padding):
+                return {"input_ids": torch.tensor([[101, 102]], dtype=torch.long)}
+
+        class Model:
+            def __init__(self):
+                self._parameter = torch.nn.Parameter(torch.zeros(1))
+
+            def parameters(self):
+                yield self._parameter
+
+            def generate(self, *, input_ids, **kwargs):
+                captured["input_dtype"] = input_ids.dtype
+                captured["input_ids"] = input_ids.detach().cpu().tolist()
+                suffix = torch.tensor([[55027, 55028]], dtype=torch.long, device=input_ids.device)
+                return torch.cat([input_ids, suffix], dim=1)
+
+        output = _sample_native_model_tokens(
+            Tokenizer(),
+            Model(),
+            torch,
+            "A piano nocturne.",
+            seed=1,
+            temperature=1.0,
+            top_p=0.98,
+            max_tokens=2,
+            prefix_model_tokens=[],
+        )
+        self.assertEqual(captured["input_dtype"], torch.long)
+        self.assertEqual(captured["input_ids"][0][-1], NATIVE_MIDI_BOS_MODEL_TOKEN_ID)
+        self.assertEqual(output, [55027, 55028])
 
     def test_native_training_tokens_preserve_upstream_extended_vocabulary(self):
         self.assertEqual(

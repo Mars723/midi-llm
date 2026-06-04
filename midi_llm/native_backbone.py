@@ -246,8 +246,8 @@ def _sample_native_model_tokens(
 
     torch.manual_seed(seed)
     llama_input = tokenizer(upstream_generation_prompt(prompt), return_tensors="pt", padding=False)
-    midi_bos = torch.tensor([[NATIVE_MIDI_BOS_MODEL_TOKEN_ID]])
-    native_prefix = torch.tensor([prefix_model_tokens or []])
+    midi_bos = torch.tensor([[NATIVE_MIDI_BOS_MODEL_TOKEN_ID]], dtype=torch.long)
+    native_prefix = torch.tensor([prefix_model_tokens or []], dtype=torch.long)
     input_ids = torch.cat([llama_input["input_ids"], midi_bos, native_prefix], dim=1).to(next(model.parameters()).device)
     with torch.no_grad():
         output = model.generate(
