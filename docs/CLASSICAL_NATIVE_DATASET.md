@@ -226,10 +226,22 @@ bash scripts/collect_asap_metadata_resources.sh
 5. Reject any adapter that regresses native upstream parity before evaluating
    longer completion, emotional control, or notation conversion.
 
-Create the native QLoRA dry-run spec before allocating GPU time:
+On a fresh GPU host, deploy the verified native bundle and run only the remote
+bootstrap preflight first. This installs the native training environment,
+extracts `native-classical-pretraining-v1.tar.gz` to
+`/root/midllm-local/classical-native-v1/training_dataset`, and writes the
+dry-run spec. It does not run an optimizer step:
 
 ```bash
-bash scripts/run_native_classical_stages.sh dry-run
+MIDI_LLM_SSH_KEY=~/.ssh/id_ed25519 \
+  bash scripts/deploy_native_classical_gpu.sh root@HOST PORT
+```
+
+If the repository and bundle are already on the GPU host, run the same
+bootstrap directly:
+
+```bash
+bash scripts/bootstrap_native_classical_gpu.sh /root/native-classical-pretraining-v1.tar.gz
 ```
 
 Then run one optimizer step only:

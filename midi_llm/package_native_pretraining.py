@@ -192,8 +192,8 @@ def _preflight_report(dataset_dir: Path, **paths: Path | str | None) -> Dict[str
         },
         "references": references,
         "next_gpu_commands": [
-            "tar -xzf native-classical-pretraining-v1.tar.gz -C /root/midllm-local/classical-native-v1",
-            "MIDI_LLM_NATIVE_DATASET=/root/midllm-local/classical-native-v1/training_dataset bash scripts/run_native_classical_stages.sh dry-run",
+            "MIDI_LLM_SSH_KEY=~/.ssh/id_ed25519 bash scripts/deploy_native_classical_gpu.sh root@HOST PORT",
+            "bash scripts/bootstrap_native_classical_gpu.sh /root/native-classical-pretraining-v1.tar.gz",
             "MIDI_LLM_NATIVE_DATASET=/root/midllm-local/classical-native-v1/training_dataset bash scripts/run_native_classical_stages.sh smoke",
             "MIDI_LLM_NATIVE_DATASET=/root/midllm-local/classical-native-v1/training_dataset bash scripts/run_native_classical_stages.sh conservative-pilot",
         ],
