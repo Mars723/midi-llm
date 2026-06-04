@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RESOURCE_ROOT=${MIDI_LLM_CLASSICAL_RESOURCE_ROOT:-"$ROOT/training_resources"}
 MANIFEST_ROOT=${MIDI_LLM_CLASSICAL_MANIFEST_ROOT:-"$ROOT/training_manifests"}
+BUNDLE_ROOT=${MIDI_LLM_CLASSICAL_BUNDLE_ROOT:-"$ROOT/training_bundles"}
 BACKUP_ROOT=${MIDI_LLM_CLASSICAL_BACKUP_ROOT:-"$HOME/Documents/MidiLLM-resource-backups/classical-resources-v1"}
 RCLONE_REMOTE=${MIDI_LLM_RCLONE_REMOTE:-}
 BACKUP_ARCHIVES=${MIDI_LLM_CLASSICAL_BACKUP_ARCHIVES:-0}
@@ -38,6 +39,17 @@ if [[ -d "$RESOURCE_ROOT/asap" ]]; then
     \( -name '*.csv' -o -name '*.md' -o -name '*.txt' \) \
     -exec shasum -a 256 {} + > "$SNAPSHOT/asap-metadata-resource-checksums.sha256"
 fi
+BUNDLE_DIRS=()
+for name in native-classical-pretraining-v1; do
+  [[ -d "$BUNDLE_ROOT/$name" ]] && BUNDLE_DIRS+=("$name")
+done
+if [[ ${#BUNDLE_DIRS[@]} -gt 0 ]]; then
+  find "$BUNDLE_ROOT" -maxdepth 2 -type f \
+    \( -name '*.tar.gz' -o -name '*.manifest.json' -o -name 'training_spec.json' \) \
+    -exec shasum -a 256 {} + > "$SNAPSHOT/training-bundle-checksums.sha256"
+  tar -czf "$SNAPSHOT/training-bundles.tar.gz" -C "$BUNDLE_ROOT" "${BUNDLE_DIRS[@]}"
+  sha256sum "$SNAPSHOT/training-bundles.tar.gz" > "$SNAPSHOT/training-bundles.tar.gz.sha256"
+fi
 tar -czf "$SNAPSHOT/classical-resource-manifests.tar.gz" -C "$MANIFEST_ROOT" "${MANIFEST_DIRS[@]}"
 sha256sum "$SNAPSHOT/classical-resource-manifests.tar.gz" > "$SNAPSHOT/classical-resource-manifests.tar.gz.sha256"
 
@@ -46,6 +58,7 @@ sha256sum "$SNAPSHOT/classical-resource-manifests.tar.gz" > "$SNAPSHOT/classical
   printf 'git_commit=%s\n' "$(git -C "$ROOT" rev-parse HEAD)"
   printf 'resource_root=%s\n' "$RESOURCE_ROOT"
   printf 'manifest_root=%s\n' "$MANIFEST_ROOT"
+  printf 'bundle_root=%s\n' "$BUNDLE_ROOT"
   if [[ -d "$RESOURCE_ROOT/mutopia/source/.git" ]]; then
     printf 'mutopia_commit=%s\n' "$(git -C "$RESOURCE_ROOT/mutopia/source" rev-parse HEAD)"
   fi

@@ -174,6 +174,15 @@ set `MIDI_LLM_CLASSICAL_BACKUP_ARCHIVES=1` to mirror the downloaded archives:
 bash scripts/backup_classical_resources.sh
 ```
 
+Build the native pretraining bundle only after all collection and review-only
+audits are current. The bundle contains the default PDMX composition-core
+native tokens and records Mutopia/PianoCoRe/ASAP/MAESTRO as excluded context;
+it does not start training:
+
+```bash
+bash scripts/package_native_pretraining_bundle.sh
+```
+
 ## Non-Commercial Performance Overlay
 
 MAESTRO `v3.0.0` is useful for a later score-to-performance model because its

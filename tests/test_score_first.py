@@ -97,6 +97,7 @@ from midi_llm.prepare_maestro import prepare_maestro_manifest
 from midi_llm.prepare_asap import _inventory_row as asap_inventory_row
 from midi_llm.prepare_pianocore import _inventory_row as pianocore_inventory_row
 from midi_llm.profile_mutopia_midi import _difficulty_proxy, _is_medium_piece_review_candidate, _preferred_midi_path
+from midi_llm.package_native_pretraining import package_native_pretraining_bundle, verify_native_pretraining_bundle
 from midi_llm.render_mutopia_review import _gallery_html
 from midi_llm.rules import create_motif_bank, generate_score_candidate, render_performance
 from midi_llm.release_gate import run_release_gate
@@ -2008,6 +2009,54 @@ class ScoreFirstTest(unittest.TestCase):
         self.assertFalse(row["commercial_use_allowed"])
         self.assertFalse(row["composition_backbone_eligible"])
         self.assertIn("non-commercial-research", row["use_channel"])
+
+    def test_native_pretraining_bundle_packages_referenced_token_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset"
+            (dataset / "tokens").mkdir(parents=True)
+            token_path = dataset / "tokens" / "work.segment-001.model_tokens.json"
+            token_path.write_text("[55026,55027]\n", encoding="utf-8")
+            row = {
+                "work_id": "work",
+                "native_segments": [
+                    {
+                        "segment": 1,
+                        "native_model_tokens_path": "tokens/work.segment-001.model_tokens.json",
+                        "native_model_token_count": 2,
+                    }
+                ],
+                "upstream_prompt": "prompt",
+                "controls": {"composer_style": "bach", "genre": "prelude"},
+            }
+            for split in ("train", "valid", "test"):
+                (dataset / f"{split}.jsonl").write_text((json.dumps(row) + "\n") if split == "train" else "", encoding="utf-8")
+            (dataset / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "examples_written": 1,
+                        "examples_failed": 0,
+                        "examples_excluded_oversized": 0,
+                        "native_segments_written": 1,
+                        "split_counts": {"train": 1, "valid": 0, "test": 0},
+                        "composer_style_counts": {"bach": 1},
+                        "genre_counts": {"prelude": 1},
+                        "segment_event_token_counts": {"min": 1, "median": 1, "max": 2},
+                        "complete_piece_event_token_counts": {"min": 1, "median": 1, "max": 2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (dataset / "materialization_errors.jsonl").write_text("", encoding="utf-8")
+            (dataset / "oversized_complete_pieces.jsonl").write_text("", encoding="utf-8")
+            gallery = root / "gallery.html"
+            gallery.write_text("<html>review</html>", encoding="utf-8")
+            bundle = root / "bundle.tar.gz"
+            result = package_native_pretraining_bundle(dataset, bundle, gallery_index=gallery)
+            verified = verify_native_pretraining_bundle(bundle)
+            self.assertTrue(result["preflight"]["gate"]["ready_for_gpu_smoke"])
+            self.assertEqual(result["preflight"]["references"]["gallery_index"]["bytes"], gallery.stat().st_size)
+            self.assertEqual(verified["verified_referenced_tokens"], 1)
 
     def test_mutopia_midi_profile_prefers_full_score_and_keeps_difficulty_unreviewed(self):
         self.assertEqual(_preferred_midi_path(["compiled/abc/score-1.midi", "compiled/abc/score.midi"]), "compiled/abc/score.midi")
